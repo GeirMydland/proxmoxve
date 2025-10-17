@@ -347,8 +347,6 @@ class ProxmoxQEMUCoordinator(ProxmoxCoordinator):
         api_status = None
         mac_addresses: dict[str, str] = {}
         primary_mac: str | None = None
-        mac_addresses: dict[str, str] = {}
-        primary_mac: str | None = None
 
         api_path = "cluster/resources"
         resources = await self.hass.async_add_executor_job(
@@ -465,6 +463,8 @@ class ProxmoxLXCCoordinator(ProxmoxCoordinator):
         """Update data  for Proxmox LXC."""
         node_name = None
         api_status = None
+        mac_addresses: dict[str, str] = {}
+        primary_mac: str | None = None
 
         api_path = "cluster/resources"
         resources = await self.hass.async_add_executor_job(
@@ -1088,3 +1088,45 @@ def poll_api(
         f"{config_entry.entry_id}_{resource_id}_forbiden",
     )
     return api_data
+def _normalize_mac(mac: str | None) -> str | None:
+    """Normalize MAC address strings."""
+    if not mac:
+        return None
+    mac = mac.strip().lower()
+    parts = mac.split(":")
+    if len(parts) == 6 and all(len(part) == 2 for part in parts):
+        return mac
+    return None
+
+
+def _extract_qemu_mac(net_value: Any) -> tuple[str | None, str | None]:
+    """Extract interface name and MAC address from QEMU net value."""
+    if not isinstance(net_value, str):
+        return (None, None)
+    iface_name: str | None = None
+    mac: str | None = None
+    segments = [segment.strip() for segment in net_value.split(",") if segment.strip()]
+    if segments:
+        first = segments[0]
+        if "=" in first:
+            _, potential_mac = first.split("=", 1)
+            mac = potential_mac.strip()
+    for part in segments[1:]:
+        if part.startswith("name="):
+            iface_name = part.split("=", 1)[1].strip()
+            break
+    return (iface_name, mac)
+
+
+def _extract_lxc_mac(net_value: Any) -> tuple[str | None, str | None]:
+    """Extract interface name and MAC address from LXC net value."""
+    if not isinstance(net_value, str):
+        return (None, None)
+    iface_name: str | None = None
+    mac: str | None = None
+    for part in (segment.strip() for segment in net_value.split(",") if segment.strip()):
+        if part.startswith("hwaddr="):
+            mac = part.split("=", 1)[1].strip()
+        elif part.startswith("name="):
+            iface_name = part.split("=", 1)[1].strip()
+    return (iface_name, mac)
