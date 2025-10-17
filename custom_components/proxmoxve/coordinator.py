@@ -40,6 +40,50 @@ if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
 
+def _normalize_mac(mac: str | None) -> str | None:
+    """Normalize MAC string."""
+    if not mac:
+        return None
+    mac = mac.strip().lower()
+    parts = mac.split(":")
+    if len(parts) == 6 and all(len(part) == 2 for part in parts):
+        return mac
+    return None
+
+
+def _extract_qemu_mac(net_value: Any) -> tuple[str | None, str | None]:
+    """Extract interface name and MAC from a QEMU net string."""
+    if not isinstance(net_value, str):
+        return (None, None)
+    parts = [segment.strip() for segment in net_value.split(",")]
+    mac = None
+    iface_name = None
+    if parts:
+        first = parts[0]
+        if "=" in first:
+            _, potential_mac = first.split("=", 1)
+            mac = potential_mac.strip()
+    for part in parts:
+        if part.startswith("name="):
+            iface_name = part.split("=", 1)[1].strip()
+            break
+    return (iface_name, mac)
+
+
+def _extract_lxc_mac(net_value: Any) -> tuple[str | None, str | None]:
+    """Extract interface name and MAC from an LXC net string."""
+    if not isinstance(net_value, str):
+        return (None, None)
+    mac = None
+    iface_name = None
+    for part in (segment.strip() for segment in net_value.split(",")):
+        if part.startswith("hwaddr="):
+            mac = part.split("=", 1)[1].strip()
+        if part.startswith("name="):
+            iface_name = part.split("=", 1)[1].strip()
+    return (iface_name, mac)
+
+
 class ProxmoxCoordinator(
     DataUpdateCoordinator[
         ProxmoxDiskData
@@ -83,6 +127,8 @@ class ProxmoxNodeCoordinator(ProxmoxCoordinator):
         node_status = ""
         node_api = {}
         api_status = {}
+        mac_addresses: dict[str, str] = {}
+        primary_mac: str | None = None
         if nodes_api := await self.hass.async_add_executor_job(
             poll_api,
             self.hass,
@@ -130,6 +176,29 @@ class ProxmoxNodeCoordinator(ProxmoxCoordinator):
                 ProxmoxType.Node,
                 self.resource_id,
             )
+
+            api_path = f"nodes/{self.resource_id}/network"
+            network_status = await self.hass.async_add_executor_job(
+                poll_api,
+                self.hass,
+                self.config_entry,
+                self.proxmox,
+                api_path,
+                ProxmoxType.Node,
+                self.resource_id,
+            )
+            if isinstance(network_status, list):
+                for iface in network_status:
+                    mac = _normalize_mac(iface.get("mac"))
+                    if not mac:
+                        continue
+                    iface_name = iface.get("iface") or iface.get("name") or mac
+                    mac_addresses[iface_name] = mac
+                    iface_type = (iface.get("type") or "").lower()
+                    if primary_mac is None and iface_type not in {"bridge", "unknown"}:
+                        primary_mac = mac
+                if primary_mac is None and mac_addresses:
+                    primary_mac = next(iter(mac_addresses.values()))
 
             api_path = f"nodes/{self.resource_id}/qemu"
             qemu_status = await self.hass.async_add_executor_job(
@@ -241,6 +310,8 @@ class ProxmoxNodeCoordinator(ProxmoxCoordinator):
                     if (("lxc" in api_status) and "list" in api_status["lxc"])
                     else UNDEFINED
                 ),
+                mac_addresses=mac_addresses,
+                primary_mac=primary_mac,
             )
         msg = f"Node {self.resource_id} unable to be found in host {self.config_entry.data[CONF_HOST]}"
         raise UpdateFailed(msg)
@@ -274,6 +345,10 @@ class ProxmoxQEMUCoordinator(ProxmoxCoordinator):
         """Update data  for Proxmox QEMU."""
         node_name = None
         api_status = None
+        mac_addresses: dict[str, str] = {}
+        primary_mac: str | None = None
+        mac_addresses: dict[str, str] = {}
+        primary_mac: str | None = None
 
         api_path = "cluster/resources"
         resources = await self.hass.async_add_executor_job(
@@ -302,6 +377,29 @@ class ProxmoxQEMUCoordinator(ProxmoxCoordinator):
                 ProxmoxType.QEMU,
                 self.resource_id,
             )
+            config_path = f"nodes/{node_name!s}/qemu/{self.resource_id}/config"
+            config_status = await self.hass.async_add_executor_job(
+                poll_api,
+                self.hass,
+                self.config_entry,
+                self.proxmox,
+                config_path,
+                ProxmoxType.QEMU,
+                self.resource_id,
+            )
+            if isinstance(config_status, dict):
+                for key in sorted(config_status):
+                    if not key.startswith("net"):
+                        continue
+                    iface_name, raw_mac = _extract_qemu_mac(config_status[key])
+                    mac = _normalize_mac(raw_mac)
+                    if not mac:
+                        continue
+                    if iface_name is None:
+                        iface_name = key
+                    mac_addresses[iface_name] = mac
+                if mac_addresses:
+                    primary_mac = next(iter(mac_addresses.values()))
         else:
             msg = f"{self.resource_id} QEMU node not found"
             raise UpdateFailed(msg)
@@ -334,6 +432,8 @@ class ProxmoxQEMUCoordinator(ProxmoxCoordinator):
             network_out=api_status.get("netout", UNDEFINED),
             disk_total=api_status.get("maxdisk", UNDEFINED),
             disk_used=api_status.get("disk", UNDEFINED),
+            mac_addresses=mac_addresses,
+            primary_mac=primary_mac,
         )
 
 
@@ -393,6 +493,29 @@ class ProxmoxLXCCoordinator(ProxmoxCoordinator):
                 ProxmoxType.LXC,
                 self.resource_id,
             )
+            config_path = f"nodes/{node_name!s}/lxc/{self.resource_id}/config"
+            config_status = await self.hass.async_add_executor_job(
+                poll_api,
+                self.hass,
+                self.config_entry,
+                self.proxmox,
+                config_path,
+                ProxmoxType.LXC,
+                self.resource_id,
+            )
+            if isinstance(config_status, dict):
+                for key in sorted(config_status):
+                    if not key.startswith("net"):
+                        continue
+                    iface_name, raw_mac = _extract_lxc_mac(config_status[key])
+                    mac = _normalize_mac(raw_mac)
+                    if not mac:
+                        continue
+                    if iface_name is None:
+                        iface_name = key
+                    mac_addresses[iface_name] = mac
+                if mac_addresses:
+                    primary_mac = next(iter(mac_addresses.values()))
         else:
             msg = f"{self.resource_id} LXC node not found"
             raise UpdateFailed(msg)
@@ -428,6 +551,8 @@ class ProxmoxLXCCoordinator(ProxmoxCoordinator):
                 if ("maxswap" in api_status and "swap" in api_status)
                 else UNDEFINED
             ),
+            mac_addresses=mac_addresses,
+            primary_mac=primary_mac,
         )
 
 

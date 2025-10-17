@@ -26,7 +26,7 @@ from homeassistant.helpers import (
 from homeassistant.helpers import (
     issue_registry as ir,
 )
-from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC, DeviceInfo
 from proxmoxer import AuthenticationError
 from proxmoxer.core import ResourceException
 from requests.exceptions import (
@@ -802,11 +802,23 @@ def device_info(
     proxmox_version = None
     manufacturer = None
     serial_number = None
+    connections: set[tuple[str, str]] | None = None
     if api_category in (ProxmoxType.QEMU, ProxmoxType.LXC):
         coordinator = coordinators[f"{api_category}_{resource_id}"]
         if (coordinator_data := coordinator.data) is not None:
             vm_name = coordinator_data.name
             node = coordinator_data.node
+            mac_map = getattr(coordinator_data, "mac_addresses", {})
+            if mac_map:
+                connections = {
+                    (CONNECTION_NETWORK_MAC, mac.lower())
+                    for mac in mac_map.values()
+                    if mac
+                }
+            elif getattr(coordinator_data, "primary_mac", None):
+                connections = {
+                    (CONNECTION_NETWORK_MAC, coordinator_data.primary_mac.lower())
+                }
 
         name = f"{api_category.upper()} {vm_name} ({resource_id})"
         identifier = f"{config_entry.entry_id}_{api_category.upper()}_{resource_id}"
@@ -836,6 +848,17 @@ def device_info(
         if (coordinator_data := coordinator.data) is not None:
             model_processor = coordinator_data.model
             proxmox_version = f"Proxmox {coordinator_data.version}"
+            mac_map = getattr(coordinator_data, "mac_addresses", {})
+            if mac_map:
+                connections = {
+                    (CONNECTION_NETWORK_MAC, mac.lower())
+                    for mac in mac_map.values()
+                    if mac
+                }
+            elif getattr(coordinator_data, "primary_mac", None):
+                connections = {
+                    (CONNECTION_NETWORK_MAC, coordinator_data.primary_mac.lower())
+                }
 
         name = f"{ProxmoxType.Node.capitalize()} {node}"
         identifier = f"{config_entry.entry_id}_{ProxmoxType.Node.upper()}_{node}"
@@ -894,6 +917,7 @@ def device_info(
             hw_version=None,
             via_device=via_device,
             serial_number=serial_number or None,
+            connections=connections,
         )
     return DeviceInfo(
         entry_type=dr.DeviceEntryType.SERVICE,
@@ -906,6 +930,7 @@ def device_info(
         hw_version=None,
         via_device=via_device,
         serial_number=serial_number or None,
+        connections=connections,
     )
 
 
