@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 from homeassistant.const import CONF_HOST, CONF_USERNAME
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.typing import UNDEFINED, UndefinedType
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
@@ -243,6 +244,15 @@ class ProxmoxNodeCoordinator(ProxmoxCoordinator):
             api_status["lxc"] = node_lxc
 
         if node_status != "":
+            connections = _connections_from_mac_data(mac_addresses, primary_mac)
+            if connections is not None:
+                update_device_via(
+                    self,
+                    ProxmoxType.Node,
+                    self.resource_id,
+                    connections,
+                )
+
             return ProxmoxNodeData(
                 type=ProxmoxType.Node,
                 model=(
@@ -406,7 +416,8 @@ class ProxmoxQEMUCoordinator(ProxmoxCoordinator):
             msg = f"QEMU {self.resource_id} unable to be found"
             raise UpdateFailed(msg)
 
-        update_device_via(self, ProxmoxType.QEMU, node_name)
+        connections = _connections_from_mac_data(mac_addresses, primary_mac)
+        update_device_via(self, ProxmoxType.QEMU, node_name, connections)
         return ProxmoxVMData(
             type=ProxmoxType.QEMU,
             node=node_name,
@@ -524,7 +535,8 @@ class ProxmoxLXCCoordinator(ProxmoxCoordinator):
             msg = f"LXC {self.resource_id} unable to be found"
             raise UpdateFailed(msg)
 
-        update_device_via(self, ProxmoxType.LXC, node_name)
+        connections = _connections_from_mac_data(mac_addresses, primary_mac)
+        update_device_via(self, ProxmoxType.LXC, node_name, connections)
 
         return ProxmoxLXCData(
             type=ProxmoxType.LXC,
@@ -980,8 +992,9 @@ def update_device_via(
     self,
     api_category: ProxmoxType,
     node_name: str,
+    connections: set[tuple[str, str]] | None = None,
 ) -> None:
-    """Return the Device Info."""
+    """Update device registry entry with connection info."""
     dev_reg = dr.async_get(self.hass)
     device = dev_reg.async_get_or_create(
         config_entry_id=self.config_entry.entry_id,
@@ -1001,18 +1014,24 @@ def update_device_via(
         }
     )
     via_device_id: str | UndefinedType = via_device.id if via_device else UNDEFINED
-    if device.via_device_id != via_device_id:
+    update_kwargs: dict[str, Any] = {
+        "via_device_id": via_device_id,
+        "entry_type": dr.DeviceEntryType.SERVICE,
+    }
+    if connections is not None:
+        update_kwargs["connections"] = connections
+    if device.via_device_id != via_device_id or (
+        connections is not None
+        and set(device.connections or set()) != connections
+    ):
         LOGGER.debug(
-            "Update device %s - connected via device: old=%s, new=%s",
+            "Update device %s - via: old=%s new=%s, connections=%s",
             self.resource_id,
             device.via_device_id,
             via_device_id,
+            connections,
         )
-        dev_reg.async_update_device(
-            device.id,
-            via_device_id=via_device_id,
-            entry_type=dr.DeviceEntryType.SERVICE,
-        )
+        dev_reg.async_update_device(device.id, **update_kwargs)
 
 
 def poll_api(
@@ -1130,3 +1149,20 @@ def _extract_lxc_mac(net_value: Any) -> tuple[str | None, str | None]:
         elif part.startswith("name="):
             iface_name = part.split("=", 1)[1].strip()
     return (iface_name, mac)
+
+
+def _connections_from_mac_data(
+    mac_map: dict[str, str] | None, primary_mac: str | None
+) -> set[tuple[str, str]] | None:
+    """Build connection tuples from MAC mapping."""
+    connections: set[tuple[str, str]] = set()
+    if mac_map:
+        for mac in mac_map.values():
+            normalized = _normalize_mac(mac)
+            if normalized:
+                connections.add((CONNECTION_NETWORK_MAC, normalized))
+    if not connections and primary_mac:
+        normalized_primary = _normalize_mac(primary_mac)
+        if normalized_primary:
+            connections.add((CONNECTION_NETWORK_MAC, normalized_primary))
+    return connections or None
