@@ -1050,7 +1050,7 @@ def update_device_via(
     if connections:
         filtered_connections: set[tuple[str, str]] = set()
         for connection in connections:
-            existing = dev_reg.async_get_device({connection})
+            existing = dev_reg.async_get_device(connections={connection})
             if existing and existing.id != device.id:
                 LOGGER.debug(
                     "Skipping connection %s for %s due to collision with device %s",
