@@ -1047,7 +1047,7 @@ def update_device_via(
         "entry_type": dr.DeviceEntryType.SERVICE,
     }
     if connections is not None:
-        update_kwargs["connections"] = connections
+        update_kwargs["new_connections"] = connections
     if device.via_device_id != via_device_id or (
         connections is not None
         and set(device.connections or set()) != connections
