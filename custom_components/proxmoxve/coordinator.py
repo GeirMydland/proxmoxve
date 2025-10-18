@@ -1046,18 +1046,39 @@ def update_device_via(
         "via_device_id": via_device_id,
         "entry_type": dr.DeviceEntryType.SERVICE,
     }
-    if connections is not None:
-        update_kwargs["new_connections"] = connections
+    new_connections_set: set[tuple[str, str]] | None = None
+    if connections:
+        filtered_connections: set[tuple[str, str]] = set()
+        for connection in connections:
+            existing = dev_reg.async_get_device({connection})
+            if existing and existing.id != device.id:
+                LOGGER.debug(
+                    "Skipping connection %s for %s due to collision with device %s",
+                    connection,
+                    self.resource_id,
+                    existing.id,
+                )
+                continue
+            filtered_connections.add(connection)
+
+        # Always keep previous connections belonging to this device
+        if device.connections:
+            filtered_connections.update(device.connections)
+
+        if filtered_connections:
+            new_connections_set = filtered_connections
+            update_kwargs["new_connections"] = filtered_connections
+    current_connections = set(device.connections or set())
     if device.via_device_id != via_device_id or (
-        connections is not None
-        and set(device.connections or set()) != connections
+        new_connections_set is not None
+        and current_connections != new_connections_set
     ):
         LOGGER.debug(
             "Update device %s - via: old=%s new=%s, connections=%s",
             self.resource_id,
             device.via_device_id,
             via_device_id,
-            connections,
+            new_connections_set,
         )
         dev_reg.async_update_device(device.id, **update_kwargs)
 
