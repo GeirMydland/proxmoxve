@@ -190,6 +190,7 @@ class ProxmoxNodeCoordinator(ProxmoxCoordinator):
             )
             if isinstance(network_status, list):
                 for iface in network_status:
+                    LOGGER.debug("Node %s network iface %s", self.resource_id, iface)
                     mac = _normalize_mac(
                         iface.get("mac")
                         or iface.get("hwaddr")
@@ -1037,22 +1038,34 @@ def update_device_via(
     # Try to locate existing device by identifier
     device = dev_reg.async_get_device(identifiers={identifier})
 
-    adopted_existing = False
-    filtered_connections: set[tuple[str, str]] = set()
 
-    if connections:
-        for connection in connections:
-            existing = dev_reg.async_get_device(connections={connection})
-            if existing and (device is None or existing.id != device.id):
+adopted_existing = False
+filtered_connections: set[tuple[str, str]] = set()
+
+if connections:
+    for connection in connections:
+        existing = dev_reg.async_get_device(connections={connection})
+        if existing and (device is None or existing.id != device.id):
+            if not existing.identifiers:
                 LOGGER.debug(
-                    "Adopting existing device %s for %s via connection %s",
-                    existing.id,
-                    self.resource_id,
+                    "Skipping connection %s for %s due to existing device %s without identifiers",
                     connection,
+                    self.resource_id,
+                    existing.id,
                 )
-                device = existing
-                adopted_existing = True
-            filtered_connections.add(connection)
+                continue
+            LOGGER.debug(
+                "Adopting existing device %s for %s via connection %s",
+                existing.id,
+                self.resource_id,
+                connection,
+            )
+            device = existing
+            adopted_existing = True
+            if connection in (existing.connections or set()):
+                continue
+        filtered_connections.add(connection)
+
 
     if device is None:
         device = dev_reg.async_get_or_create(
@@ -1075,6 +1088,18 @@ def update_device_via(
             )
         }
     )
+    if via_device is None and node_name is not None:
+        via_device = dev_reg.async_get_or_create(
+            config_entry_id=self.config_entry.entry_id,
+            identifiers={
+                (
+                    DOMAIN,
+                    f"{self.config_entry.entry_id}_{ProxmoxType.Node.upper()}_{node_name}",
+                )
+            },
+            entry_type=dr.DeviceEntryType.SERVICE,
+        )
+    
     via_device_id: str | UndefinedType = via_device.id if via_device else UNDEFINED
 
     update_kwargs: dict[str, Any] = {
