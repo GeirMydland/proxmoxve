@@ -264,7 +264,6 @@ class ProxmoxNodeCoordinator(ProxmoxCoordinator):
                     self.resource_id,
                     connections,
                 )
-
             return ProxmoxNodeData(
                 type=ProxmoxType.Node,
                 model=(
