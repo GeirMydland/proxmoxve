@@ -1036,38 +1036,7 @@ def update_device_via(
         f"{self.config_entry.entry_id}_{api_category.upper()}_{self.resource_id}",
     )
 
-    # Try to locate existing device by identifier
     device = dev_reg.async_get_device(identifiers={identifier})
-
-
-adopted_existing = False
-filtered_connections: set[tuple[str, str]] = set()
-
-if connections:
-    for connection in connections:
-        existing = dev_reg.async_get_device(connections={connection})
-        if existing and (device is None or existing.id != device.id):
-            if not existing.identifiers:
-                LOGGER.debug(
-                    "Skipping connection %s for %s due to existing device %s without identifiers",
-                    connection,
-                    self.resource_id,
-                    existing.id,
-                )
-                continue
-            LOGGER.debug(
-                "Adopting existing device %s for %s via connection %s",
-                existing.id,
-                self.resource_id,
-                connection,
-            )
-            device = existing
-            adopted_existing = True
-            if connection in (existing.connections or set()):
-                continue
-        filtered_connections.add(connection)
-
-
     if device is None:
         device = dev_reg.async_get_or_create(
             config_entry_id=self.config_entry.entry_id,
@@ -1081,32 +1050,19 @@ if connections:
             add_config_entry_id=self.config_entry.entry_id,
         )
 
-    via_device = dev_reg.async_get_device(
-        {
-            (
-                DOMAIN,
-                f"{self.config_entry.entry_id}_{ProxmoxType.Node.upper()}_{node_name}",
-            )
-        }
+    via_identifier = (
+        DOMAIN,
+        f"{self.config_entry.entry_id}_{ProxmoxType.Node.upper()}_{node_name}",
     )
-    if node_name is not None:
+    via_device = dev_reg.async_get_device(identifiers={via_identifier})
+    if via_device is None and node_name is not None:
         via_device = dev_reg.async_get_or_create(
             config_entry_id=self.config_entry.entry_id,
-            identifiers={
-                (
-                    DOMAIN,
-                    f"{self.config_entry.entry_id}_{ProxmoxType.Node.upper()}_{node_name}",
-                )
-            },
+            identifiers={via_identifier},
             entry_type=dr.DeviceEntryType.SERVICE,
         )
-    else:
-        via_device = dev_reg.async_get_device({
-            (DOMAIN, f"{self.config_entry.entry_id}_{ProxmoxType.Node.upper()}_{node_name}")
-        })
-    
-    via_device_id: str | UndefinedType = via_device.id if via_device else UNDEFINED
 
+    via_device_id: str | UndefinedType = via_device.id if via_device else UNDEFINED
     update_kwargs: dict[str, Any] = {
         "via_device_id": via_device_id,
         "entry_type": dr.DeviceEntryType.SERVICE,
@@ -1114,12 +1070,13 @@ if connections:
 
     current_connections = set(device.connections or set())
     new_connections_set: set[tuple[str, str]] | None = None
+    adopted_existing = False
 
     if connections:
         filtered_connections: set[tuple[str, str]] = set()
         for connection in connections:
             existing = dev_reg.async_get_device(connections={connection})
-            if existing and (device is None or existing.id != device.id):
+            if existing and existing.id != device.id:
                 if not existing.identifiers:
                     LOGGER.debug(
                         "Skipping connection %s for %s due to existing device %s without identifiers",
@@ -1136,35 +1093,18 @@ if connections:
                 )
                 device = existing
                 adopted_existing = True
-                if connection in (existing.connections or set()):
-                    continue
+                current_connections = set(device.connections or set())
+                if identifier not in device.identifiers:
+                    dev_reg.async_update_device(
+                        device.id,
+                        new_identifiers=device.identifiers | {identifier},
+                        add_config_entry_id=self.config_entry.entry_id,
+                    )
             filtered_connections.add(connection)
 
         if filtered_connections:
-            filtered_connections.update(current_connections)
-            new_connections_set = filtered_connections
-            update_kwargs["new_connections"] = filtered_connections
-
-    if (
-        device.via_device_id != via_device_id
-        or (new_connections_set is not None and current_connections != new_connections_set)
-        or adopted_existing
-    ):
-        LOGGER.debug(
-            "Update device %s - via: old=%s new=%s, connections=%s",
-            self.resource_id,
-            device.via_device_id,
-            via_device_id,
-            new_connections_set,
-        )
-        dev_reg.async_update_device(device.id, **update_kwargs)
-    current_connections = set(device.connections or set())
-    new_connections_set: set[tuple[str, str]] | None = None
-
-    if filtered_connections:
-        filtered_connections.update(current_connections)
-        new_connections_set = filtered_connections
-        update_kwargs["new_connections"] = filtered_connections
+            new_connections_set = filtered_connections | current_connections
+            update_kwargs["new_connections"] = new_connections_set
 
     if (
         device.via_device_id != via_device_id
