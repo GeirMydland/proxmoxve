@@ -200,6 +200,12 @@ class ProxmoxNodeCoordinator(ProxmoxCoordinator):
                         primary_mac = mac
                 if primary_mac is None and mac_addresses:
                     primary_mac = next(iter(mac_addresses.values()))
+            else:
+                LOGGER.debug(
+                    "Node %s network config unavailable or malformed: %s",
+                    self.resource_id,
+                    network_status,
+                )
 
             api_path = f"nodes/{self.resource_id}/qemu"
             qemu_status = await self.hass.async_add_executor_job(
@@ -408,6 +414,12 @@ class ProxmoxQEMUCoordinator(ProxmoxCoordinator):
                     mac_addresses[iface_name] = mac
                 if mac_addresses:
                     primary_mac = next(iter(mac_addresses.values()))
+            else:
+                LOGGER.debug(
+                    "QEMU %s config missing or access denied: %s",
+                    self.resource_id,
+                    config_status,
+                )
         else:
             msg = f"{self.resource_id} QEMU node not found"
             raise UpdateFailed(msg)
@@ -417,6 +429,11 @@ class ProxmoxQEMUCoordinator(ProxmoxCoordinator):
             raise UpdateFailed(msg)
 
         connections = _connections_from_mac_data(mac_addresses, primary_mac)
+        LOGGER.debug(
+            "QEMU %s detected connections: %s",
+            self.resource_id,
+            connections,
+        )
         update_device_via(self, ProxmoxType.QEMU, node_name, connections)
         return ProxmoxVMData(
             type=ProxmoxType.QEMU,
@@ -527,6 +544,12 @@ class ProxmoxLXCCoordinator(ProxmoxCoordinator):
                     mac_addresses[iface_name] = mac
                 if mac_addresses:
                     primary_mac = next(iter(mac_addresses.values()))
+            else:
+                LOGGER.debug(
+                    "LXC %s config missing or access denied: %s",
+                    self.resource_id,
+                    config_status,
+                )
         else:
             msg = f"{self.resource_id} LXC node not found"
             raise UpdateFailed(msg)
@@ -536,6 +559,11 @@ class ProxmoxLXCCoordinator(ProxmoxCoordinator):
             raise UpdateFailed(msg)
 
         connections = _connections_from_mac_data(mac_addresses, primary_mac)
+        LOGGER.debug(
+            "LXC %s detected connections: %s",
+            self.resource_id,
+            connections,
+        )
         update_device_via(self, ProxmoxType.LXC, node_name, connections)
 
         return ProxmoxLXCData(
