@@ -658,6 +658,10 @@ class ProxmoxStorageCoordinator(ProxmoxCoordinator):
         )
 
         api_status = []
+        if not api_storages:
+            msg = f"Storage {self.resource_id} unable to be found"
+            raise UpdateFailed(msg)
+
         for api_storage in api_storages:
             if api_storage["id"] == self.resource_id:
                 api_status = api_storage
@@ -716,7 +720,11 @@ class ProxmoxZFSCoordinator(ProxmoxCoordinator):
             self.resource_id,
         )
 
-        pool_status = []
+        if not pools:
+            msg = f"ZFS Pool {self.resource_id} unable to be found for Node {self.node_name}"
+            raise UpdateFailed(msg)
+
+        pool_status = None
         for pool in pools:
             if pool["name"] == self.resource_id:
                 pool_status = pool
@@ -1131,6 +1139,56 @@ def poll_api(
     issue_crete_permissions: bool | None = True,
 ) -> dict[str, Any] | None:
     """Return data from the Proxmox Node API."""
+    try:
+        api_data = get_api(proxmox, api_path)
+    except AuthenticationError as error:
+        raise ConfigEntryAuthFailed from error
+    except (
+        SSLError,
+        ConnectTimeout,
+        HTTPError,
+        ConnectionError,
+        connError,
+        RetryError,
+    ) as error:
+        raise UpdateFailed(error) from error
+    except ResourceException as error:
+        if error.status_code == 403 and issue_crete_permissions:
+            resource_id_str = "" if resource_id is None else str(resource_id)
+            update_prefix = f"{ProxmoxType.Update.capitalize()} "
+            resource_clean = (
+                resource_id_str[len(update_prefix) :]
+                if resource_id_str.startswith(update_prefix)
+                else resource_id_str
+            )
+            ir.create_issue(
+                hass,
+                DOMAIN,
+                f"{config_entry.entry_id}_{resource_id}_forbiden",
+                is_fixable=False,
+                is_persistent=True,
+                severity=ir.IssueSeverity.ERROR,
+                translation_key="resource_exception_forbiden",
+                translation_placeholders={
+                    "resource": f"{api_category.capitalize()} {resource_clean}".strip(),
+                    "user": config_entry.data[CONF_USERNAME],
+                    "permission": permission_to_resource(
+                        api_category,
+                        resource_clean,
+                    ),
+                },
+            )
+            LOGGER.debug(
+                f"Error get API path {api_path}: User not allowed to access the resource, check user permissions as per the documentation, see details in the repair created by the integration."
+            )
+            return None
+        raise UpdateFailed from error
+    ir.delete_issue(
+        hass,
+        DOMAIN,
+        f"{config_entry.entry_id}_{resource_id}_forbiden",
+    )
+    return api_data
 
 
 def permission_to_resource(
@@ -1149,50 +1207,6 @@ def permission_to_resource(
     if api_category is ProxmoxType.Disk:
         return f"['perm','/nodes/{resource_id}',['Sys.Audit']]"
     return "Unmapped"
-
-    try:
-        api_data = get_api(proxmox, api_path)
-    except AuthenticationError as error:
-        raise ConfigEntryAuthFailed from error
-    except (
-        SSLError,
-        ConnectTimeout,
-        HTTPError,
-        ConnectionError,
-        connError,
-        RetryError,
-    ) as error:
-        raise UpdateFailed(error) from error
-    except ResourceException as error:
-        if error.status_code == 403 and issue_crete_permissions:
-            ir.create_issue(
-                hass,
-                DOMAIN,
-                f"{config_entry.entry_id}_{resource_id}_forbiden",
-                is_fixable=False,
-                is_persistent=True,
-                severity=ir.IssueSeverity.ERROR,
-                translation_key="resource_exception_forbiden",
-                translation_placeholders={
-                    "resource": f"{api_category.capitalize()} {resource_id.replace(f'{ProxmoxType.Update.capitalize()} ', '')}",
-                    "user": config_entry.data[CONF_USERNAME],
-                    "permission": permission_to_resource(
-                        api_category,
-                        resource_id.replace(f"{ProxmoxType.Update.capitalize()} ", ""),
-                    ),
-                },
-            )
-            LOGGER.debug(
-                f"Error get API path {api_path}: User not allowed to access the resource, check user permissions as per the documentation, see details in the repair created by the integration."
-            )
-            return None
-        raise UpdateFailed from error
-    ir.delete_issue(
-        hass,
-        DOMAIN,
-        f"{config_entry.entry_id}_{resource_id}_forbiden",
-    )
-    return api_data
 def _normalize_mac(mac: str | None) -> str | None:
     """Normalize MAC address strings."""
     if not mac:
