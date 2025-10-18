@@ -189,6 +189,7 @@ class ProxmoxNodeCoordinator(ProxmoxCoordinator):
                 self.resource_id,
             )
             if isinstance(network_status, list):
+                primary_candidates: list[tuple[str, int]] = []
                 for iface in network_status:
                     LOGGER.debug("Node %s network iface %s", self.resource_id, iface)
                     mac = _extract_node_mac(iface)
@@ -196,9 +197,10 @@ class ProxmoxNodeCoordinator(ProxmoxCoordinator):
                         continue
                     iface_name = iface.get("iface") or iface.get("name") or mac
                     mac_addresses[iface_name] = mac
-                    iface_type = (iface.get("type") or "").lower()
-                    if primary_mac is None and iface_type not in {"bridge", "unknown"}:
-                        primary_mac = mac
+                    priority = _interface_priority(iface)
+                    primary_candidates.append((mac, priority))
+                if primary_candidates:
+                    primary_mac = min(primary_candidates, key=lambda item: item[1])[0]
                 if primary_mac is None and mac_addresses:
                     primary_mac = next(iter(mac_addresses.values()))
             else:
@@ -1278,6 +1280,22 @@ def _extract_node_mac(iface: dict[str, Any]) -> str | None:
         if normalized:
             return normalized
     return None
+
+
+def _interface_priority(iface: dict[str, Any]) -> int:
+    """Return a priority value for interface selection (lower is better)."""
+    iface_name = (iface.get("iface") or iface.get("name") or "").lower()
+    iface_type = (iface.get("type") or "").lower()
+
+    if iface_type == "bridge" or iface_name.startswith("vmbr"):
+        return 5
+    if iface_name.startswith(("en", "eth")):
+        return 0
+    if iface_name.startswith(("wl", "wi")):
+        return 3
+    if iface_type in {"eth", "bond"}:
+        return 1
+    return 4
 
 
 def _connections_from_mac_data(
