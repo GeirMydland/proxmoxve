@@ -191,12 +191,7 @@ class ProxmoxNodeCoordinator(ProxmoxCoordinator):
             if isinstance(network_status, list):
                 for iface in network_status:
                     LOGGER.debug("Node %s network iface %s", self.resource_id, iface)
-                    LOGGER.debug("Node %s network iface %s", self.resource_id, iface)
-                    mac = _normalize_mac(
-                        iface.get("mac")
-                        or iface.get("hwaddr")
-                        or iface.get("address")
-                    )
+                    mac = _extract_node_mac(iface)
                     if not mac:
                         continue
                     iface_name = iface.get("iface") or iface.get("name") or mac
@@ -1257,6 +1252,32 @@ def _extract_lxc_mac(net_value: Any) -> tuple[str | None, str | None]:
         elif part.startswith("name="):
             iface_name = part.split("=", 1)[1].strip()
     return (iface_name, mac)
+
+
+def _extract_node_mac(iface: dict[str, Any]) -> str | None:
+    """Extract a MAC for a node interface, including alt-name fallbacks."""
+    candidates: list[str | None] = [
+        iface.get("mac"),
+        iface.get("hwaddr"),
+        iface.get("address"),
+    ]
+    for alt in iface.get("altnames", []) or []:
+        if isinstance(alt, str):
+            if _normalize_mac(alt):
+                candidates.append(alt)
+            elif len(alt) == 15 and alt[:3] in {"wlx", "enx"}:
+                raw = alt[3:]
+                if all(ch in "0123456789abcdefABCDEF" for ch in raw):
+                    formatted = ":".join(raw[i : i + 2] for i in range(0, 12, 2))
+                    candidates.append(formatted.lower())
+            elif len(alt) == 17 and alt[:3] in {"wlx", "enx"} and ":" in alt:
+                candidates.append(alt[3:])
+
+    for candidate in candidates:
+        normalized = _normalize_mac(candidate) if candidate else None
+        if normalized:
+            return normalized
+    return None
 
 
 def _connections_from_mac_data(
