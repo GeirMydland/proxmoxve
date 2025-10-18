@@ -1288,13 +1288,13 @@ def _interface_priority(iface: dict[str, Any]) -> int:
     iface_type = (iface.get("type") or "").lower()
 
     if iface_type == "bridge" or iface_name.startswith("vmbr"):
-        return 5
-    if iface_name.startswith(("en", "eth")):
         return 0
+    if iface_name.startswith(("en", "eth")):
+        return 1
     if iface_name.startswith(("wl", "wi")):
         return 3
     if iface_type in {"eth", "bond"}:
-        return 1
+        return 2
     return 4
 
 
