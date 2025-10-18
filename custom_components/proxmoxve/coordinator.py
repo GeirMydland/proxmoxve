@@ -191,6 +191,7 @@ class ProxmoxNodeCoordinator(ProxmoxCoordinator):
             if isinstance(network_status, list):
                 for iface in network_status:
                     LOGGER.debug("Node %s network iface %s", self.resource_id, iface)
+                    LOGGER.debug("Node %s network iface %s", self.resource_id, iface)
                     mac = _normalize_mac(
                         iface.get("mac")
                         or iface.get("hwaddr")
@@ -1088,7 +1089,7 @@ if connections:
             )
         }
     )
-    if via_device is None and node_name is not None:
+    if node_name is not None:
         via_device = dev_reg.async_get_or_create(
             config_entry_id=self.config_entry.entry_id,
             identifiers={
@@ -1099,6 +1100,10 @@ if connections:
             },
             entry_type=dr.DeviceEntryType.SERVICE,
         )
+    else:
+        via_device = dev_reg.async_get_device({
+            (DOMAIN, f"{self.config_entry.entry_id}_{ProxmoxType.Node.upper()}_{node_name}")
+        })
     
     via_device_id: str | UndefinedType = via_device.id if via_device else UNDEFINED
 
@@ -1107,6 +1112,52 @@ if connections:
         "entry_type": dr.DeviceEntryType.SERVICE,
     }
 
+    current_connections = set(device.connections or set())
+    new_connections_set: set[tuple[str, str]] | None = None
+
+    if connections:
+        filtered_connections: set[tuple[str, str]] = set()
+        for connection in connections:
+            existing = dev_reg.async_get_device(connections={connection})
+            if existing and (device is None or existing.id != device.id):
+                if not existing.identifiers:
+                    LOGGER.debug(
+                        "Skipping connection %s for %s due to existing device %s without identifiers",
+                        connection,
+                        self.resource_id,
+                        existing.id,
+                    )
+                    continue
+                LOGGER.debug(
+                    "Adopting existing device %s for %s via connection %s",
+                    existing.id,
+                    self.resource_id,
+                    connection,
+                )
+                device = existing
+                adopted_existing = True
+                if connection in (existing.connections or set()):
+                    continue
+            filtered_connections.add(connection)
+
+        if filtered_connections:
+            filtered_connections.update(current_connections)
+            new_connections_set = filtered_connections
+            update_kwargs["new_connections"] = filtered_connections
+
+    if (
+        device.via_device_id != via_device_id
+        or (new_connections_set is not None and current_connections != new_connections_set)
+        or adopted_existing
+    ):
+        LOGGER.debug(
+            "Update device %s - via: old=%s new=%s, connections=%s",
+            self.resource_id,
+            device.via_device_id,
+            via_device_id,
+            new_connections_set,
+        )
+        dev_reg.async_update_device(device.id, **update_kwargs)
     current_connections = set(device.connections or set())
     new_connections_set: set[tuple[str, str]] | None = None
 
@@ -1141,24 +1192,23 @@ def poll_api(
 ) -> dict[str, Any] | None:
     """Return data from the Proxmox Node API."""
 
-    def permission_to_resource(
-        api_category: ProxmoxType,
-        resource_id: int | str | None = None,
-    ) -> str:
-        """Return the permissions required for the resource."""
-        match api_category:
-            case ProxmoxType.Node:
-                return f"['perm','/nodes/{resource_id}',['Sys.Audit']]"
-            case ProxmoxType.QEMU | ProxmoxType.LXC:
-                return f"['perm','/vms/{resource_id}',['VM.Audit']]"
-            case ProxmoxType.Storage:
-                return f"['perm','/storage/{resource_id}',['Datastore.Audit'],'any',1]"
-            case ProxmoxType.Update:
-                return f"['perm','/nodes/{resource_id}',['Sys.Modify']]"
-            case ProxmoxType.Disk:
-                return f"['perm','/nodes/{resource_id}',['Sys.Audit']]"
-            case _:
-                return "Unmapped"
+
+def permission_to_resource(
+    api_category: ProxmoxType,
+    resource_id: int | str | None = None,
+) -> str:
+    """Return the permissions required for the resource."""
+    if api_category is ProxmoxType.Node:
+        return f"['perm','/nodes/{resource_id}',['Sys.Audit']]"
+    if api_category in (ProxmoxType.QEMU, ProxmoxType.LXC):
+        return f"['perm','/vms/{resource_id}',['VM.Audit']]"
+    if api_category is ProxmoxType.Storage:
+        return f"['perm','/storage/{resource_id}',['Datastore.Audit'],'any',1]"
+    if api_category is ProxmoxType.Update:
+        return f"['perm','/nodes/{resource_id}',['Sys.Modify']]"
+    if api_category is ProxmoxType.Disk:
+        return f"['perm','/nodes/{resource_id}',['Sys.Audit']]"
+    return "Unmapped"
 
     try:
         api_data = get_api(proxmox, api_path)
