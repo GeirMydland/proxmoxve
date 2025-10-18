@@ -1045,6 +1045,46 @@ def update_device_via(
     )
 
     device = dev_reg.async_get_device(identifiers={identifier})
+    adopted_existing = False
+    filtered_connections: set[tuple[str, str]] = set()
+    original_device = device
+
+    if connections:
+        for connection in connections:
+            existing = dev_reg.async_get_device(connections={connection})
+            if existing and (device is None or existing.id != device.id):
+                if not existing.identifiers:
+                    LOGGER.debug(
+                        "Skipping connection %s for %s due to existing device %s without identifiers",
+                        connection,
+                        self.resource_id,
+                        existing.id,
+                    )
+                    continue
+                LOGGER.debug(
+                    "Adopting existing device %s for %s via connection %s",
+                    existing.id,
+                    self.resource_id,
+                    connection,
+                )
+                device = existing
+                adopted_existing = True
+            filtered_connections.add(connection)
+
+    if (
+        adopted_existing
+        and original_device
+        and original_device.id != device.id
+        and original_device.config_entries == {self.config_entry.entry_id}
+    ):
+        LOGGER.debug(
+            "Removing duplicate device %s after adopting %s for %s",
+            original_device.id,
+            device.id if device else "unknown",
+            self.resource_id,
+        )
+        dev_reg.async_remove_device(original_device.id)
+
     if device is None:
         device = dev_reg.async_get_or_create(
             config_entry_id=self.config_entry.entry_id,
@@ -1078,41 +1118,10 @@ def update_device_via(
 
     current_connections = set(device.connections or set())
     new_connections_set: set[tuple[str, str]] | None = None
-    adopted_existing = False
 
-    if connections:
-        filtered_connections: set[tuple[str, str]] = set()
-        for connection in connections:
-            existing = dev_reg.async_get_device(connections={connection})
-            if existing and existing.id != device.id:
-                if not existing.identifiers:
-                    LOGGER.debug(
-                        "Skipping connection %s for %s due to existing device %s without identifiers",
-                        connection,
-                        self.resource_id,
-                        existing.id,
-                    )
-                    continue
-                LOGGER.debug(
-                    "Adopting existing device %s for %s via connection %s",
-                    existing.id,
-                    self.resource_id,
-                    connection,
-                )
-                device = existing
-                adopted_existing = True
-                current_connections = set(device.connections or set())
-                if identifier not in device.identifiers:
-                    dev_reg.async_update_device(
-                        device.id,
-                        new_identifiers=device.identifiers | {identifier},
-                        add_config_entry_id=self.config_entry.entry_id,
-                    )
-            filtered_connections.add(connection)
-
-        if filtered_connections:
-            new_connections_set = filtered_connections | current_connections
-            update_kwargs["new_connections"] = new_connections_set
+    if filtered_connections:
+        new_connections_set = filtered_connections | current_connections
+        update_kwargs["new_connections"] = new_connections_set
 
     if (
         device.via_device_id != via_device_id
