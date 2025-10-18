@@ -189,10 +189,15 @@ class ProxmoxNodeCoordinator(ProxmoxCoordinator):
                 self.resource_id,
             )
             if isinstance(network_status, list):
+                iface_lookup = {
+                    (entry.get("iface") or entry.get("name")): entry
+                    for entry in network_status
+                    if isinstance(entry, dict)
+                }
                 primary_candidates: list[tuple[str, int]] = []
                 for iface in network_status:
                     LOGGER.debug("Node %s network iface %s", self.resource_id, iface)
-                    mac = _extract_node_mac(iface)
+                    mac = _extract_node_mac(iface, iface_lookup)
                     if not mac:
                         continue
                     iface_name = iface.get("iface") or iface.get("name") or mac
@@ -1256,7 +1261,9 @@ def _extract_lxc_mac(net_value: Any) -> tuple[str | None, str | None]:
     return (iface_name, mac)
 
 
-def _extract_node_mac(iface: dict[str, Any]) -> str | None:
+def _extract_node_mac(
+    iface: dict[str, Any], iface_lookup: dict[str | None, dict[str, Any]] | None = None
+) -> str | None:
     """Extract a MAC for a node interface, including alt-name fallbacks."""
     candidates: list[str | None] = [
         iface.get("mac"),
@@ -1274,6 +1281,21 @@ def _extract_node_mac(iface: dict[str, Any]) -> str | None:
                     candidates.append(formatted.lower())
             elif len(alt) == 17 and alt[:3] in {"wlx", "enx"} and ":" in alt:
                 candidates.append(alt[3:])
+
+    if (
+        iface_lookup
+        and isinstance(iface.get("bridge_ports"), str)
+        and (
+            (iface.get("type") or "").lower() == "bridge"
+            or (iface.get("iface") or "").startswith("vmbr")
+        )
+    ):
+        for port in iface["bridge_ports"].split():
+            port_iface = iface_lookup.get(port)
+            if port_iface:
+                port_mac = _extract_node_mac(port_iface, iface_lookup)
+                if port_mac:
+                    candidates.insert(0, port_mac)
 
     for candidate in candidates:
         normalized = _normalize_mac(candidate) if candidate else None
