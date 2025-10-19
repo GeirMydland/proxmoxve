@@ -194,10 +194,40 @@ class ProxmoxNodeCoordinator(ProxmoxCoordinator):
                     for entry in network_status
                     if isinstance(entry, dict)
                 }
+                iface_details_cache: dict[str, dict[str, Any] | None] = {}
                 primary_candidates: list[tuple[str, int]] = []
                 for iface in network_status:
                     LOGGER.debug("Node %s network iface %s", self.resource_id, iface)
                     mac = _extract_node_mac(iface, iface_lookup)
+                    if not mac:
+                        iface_id = iface.get("iface") or iface.get("name")
+                        if iface_id and iface_id not in iface_details_cache:
+                            detail_path = f"nodes/{self.resource_id}/network/{iface_id}"
+                            try:
+                                detail = await self.hass.async_add_executor_job(
+                                    poll_api,
+                                    self.hass,
+                                    self.config_entry,
+                                    self.proxmox,
+                                    detail_path,
+                                    ProxmoxType.Node,
+                                    f"{self.resource_id}_{iface_id}",
+                                    False,
+                                )
+                            except UpdateFailed:
+                                detail = None
+                            iface_details_cache[iface_id] = (
+                                detail if isinstance(detail, dict) else None
+                            )
+                            if detail:
+                                iface.update(detail)
+                                iface_lookup[iface_id] = iface
+                                mac = _extract_node_mac(iface, iface_lookup)
+                        elif iface_id:
+                            detail = iface_details_cache.get(iface_id)
+                            if detail:
+                                iface.update(detail)
+                                mac = _extract_node_mac(iface, iface_lookup)
                     if not mac:
                         continue
                     iface_name = iface.get("iface") or iface.get("name") or mac
@@ -1310,13 +1340,13 @@ def _interface_priority(iface: dict[str, Any]) -> int:
     iface_type = (iface.get("type") or "").lower()
 
     if iface_type == "bridge" or iface_name.startswith("vmbr"):
-        return 0
+        return 5
     if iface_name.startswith(("en", "eth")):
-        return 1
+        return 0
     if iface_name.startswith(("wl", "wi")):
         return 3
     if iface_type in {"eth", "bond"}:
-        return 2
+        return 1
     return 4
 
 
