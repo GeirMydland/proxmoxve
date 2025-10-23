@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING, Any
 from homeassistant.const import CONF_HOST, CONF_USERNAME
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers import device_registry as dr
-from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.typing import UNDEFINED, UndefinedType
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
@@ -26,6 +25,13 @@ from requests.exceptions import (
 
 from .api import get_api
 from .const import CONF_NODE, DOMAIN, LOGGER, UPDATE_INTERVAL, ProxmoxType
+from .device_connections import (
+    async_get_node_mac_data,
+    connections_from_mac_data,
+    extract_lxc_mac_data,
+    extract_qemu_mac_data,
+    update_device_via,
+)
 from .models import (
     ProxmoxDiskData,
     ProxmoxLXCData,
@@ -39,50 +45,6 @@ from .models import (
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
     from homeassistant.core import HomeAssistant
-
-
-def _normalize_mac(mac: str | None) -> str | None:
-    """Normalize MAC string."""
-    if not mac:
-        return None
-    mac = mac.strip().lower()
-    parts = mac.split(":")
-    if len(parts) == 6 and all(len(part) == 2 for part in parts):
-        return mac
-    return None
-
-
-def _extract_qemu_mac(net_value: Any) -> tuple[str | None, str | None]:
-    """Extract interface name and MAC from a QEMU net string."""
-    if not isinstance(net_value, str):
-        return (None, None)
-    parts = [segment.strip() for segment in net_value.split(",")]
-    mac = None
-    iface_name = None
-    if parts:
-        first = parts[0]
-        if "=" in first:
-            _, potential_mac = first.split("=", 1)
-            mac = potential_mac.strip()
-    for part in parts:
-        if part.startswith("name="):
-            iface_name = part.split("=", 1)[1].strip()
-            break
-    return (iface_name, mac)
-
-
-def _extract_lxc_mac(net_value: Any) -> tuple[str | None, str | None]:
-    """Extract interface name and MAC from an LXC net string."""
-    if not isinstance(net_value, str):
-        return (None, None)
-    mac = None
-    iface_name = None
-    for part in (segment.strip() for segment in net_value.split(",")):
-        if part.startswith("hwaddr="):
-            mac = part.split("=", 1)[1].strip()
-        if part.startswith("name="):
-            iface_name = part.split("=", 1)[1].strip()
-    return (iface_name, mac)
 
 
 class ProxmoxCoordinator(
@@ -178,72 +140,13 @@ class ProxmoxNodeCoordinator(ProxmoxCoordinator):
                 self.resource_id,
             )
 
-            api_path = f"nodes/{self.resource_id}/network"
-            network_status = await self.hass.async_add_executor_job(
-                poll_api,
+            mac_addresses, primary_mac = await async_get_node_mac_data(
                 self.hass,
                 self.config_entry,
                 self.proxmox,
-                api_path,
-                ProxmoxType.Node,
                 self.resource_id,
+                poll_api,
             )
-            if isinstance(network_status, list):
-                iface_lookup = {
-                    (entry.get("iface") or entry.get("name")): entry
-                    for entry in network_status
-                    if isinstance(entry, dict)
-                }
-                iface_details_cache: dict[str, dict[str, Any] | None] = {}
-                primary_candidates: list[tuple[str, int]] = []
-                for iface in network_status:
-                    LOGGER.debug("Node %s network iface %s", self.resource_id, iface)
-                    mac = _extract_node_mac(iface, iface_lookup)
-                    if not mac:
-                        iface_id = iface.get("iface") or iface.get("name")
-                        if iface_id and iface_id not in iface_details_cache:
-                            detail_path = f"nodes/{self.resource_id}/network/{iface_id}"
-                            try:
-                                detail = await self.hass.async_add_executor_job(
-                                    poll_api,
-                                    self.hass,
-                                    self.config_entry,
-                                    self.proxmox,
-                                    detail_path,
-                                    ProxmoxType.Node,
-                                    f"{self.resource_id}_{iface_id}",
-                                    False,
-                                )
-                            except UpdateFailed:
-                                detail = None
-                            iface_details_cache[iface_id] = (
-                                detail if isinstance(detail, dict) else None
-                            )
-                            if detail:
-                                iface.update(detail)
-                                iface_lookup[iface_id] = iface
-                                mac = _extract_node_mac(iface, iface_lookup)
-                        elif iface_id:
-                            detail = iface_details_cache.get(iface_id)
-                            if detail:
-                                iface.update(detail)
-                                mac = _extract_node_mac(iface, iface_lookup)
-                    if not mac:
-                        continue
-                    iface_name = iface.get("iface") or iface.get("name") or mac
-                    mac_addresses[iface_name] = mac
-                    priority = _interface_priority(iface)
-                    primary_candidates.append((mac, priority))
-                if primary_candidates:
-                    primary_mac = min(primary_candidates, key=lambda item: item[1])[0]
-                if primary_mac is None and mac_addresses:
-                    primary_mac = next(iter(mac_addresses.values()))
-            else:
-                LOGGER.debug(
-                    "Node %s network config unavailable or malformed: %s",
-                    self.resource_id,
-                    network_status,
-                )
 
             api_path = f"nodes/{self.resource_id}/qemu"
             qemu_status = await self.hass.async_add_executor_job(
@@ -288,7 +191,7 @@ class ProxmoxNodeCoordinator(ProxmoxCoordinator):
             api_status["lxc"] = node_lxc
 
         if node_status != "":
-            connections = _connections_from_mac_data(mac_addresses, primary_mac)
+            connections = connections_from_mac_data(mac_addresses, primary_mac)
             if connections is not None:
                 update_device_via(
                     self,
@@ -439,18 +342,7 @@ class ProxmoxQEMUCoordinator(ProxmoxCoordinator):
                 self.resource_id,
             )
             if isinstance(config_status, dict):
-                for key in sorted(config_status):
-                    if not key.startswith("net"):
-                        continue
-                    iface_name, raw_mac = _extract_qemu_mac(config_status[key])
-                    mac = _normalize_mac(raw_mac)
-                    if not mac:
-                        continue
-                    if iface_name is None:
-                        iface_name = key
-                    mac_addresses[iface_name] = mac
-                if mac_addresses:
-                    primary_mac = next(iter(mac_addresses.values()))
+                mac_addresses, primary_mac = extract_qemu_mac_data(config_status)
             else:
                 LOGGER.debug(
                     "QEMU %s config missing or access denied: %s",
@@ -465,7 +357,7 @@ class ProxmoxQEMUCoordinator(ProxmoxCoordinator):
             msg = f"QEMU {self.resource_id} unable to be found"
             raise UpdateFailed(msg)
 
-        connections = _connections_from_mac_data(mac_addresses, primary_mac)
+        connections = connections_from_mac_data(mac_addresses, primary_mac)
         LOGGER.debug(
             "QEMU %s detected connections: %s",
             self.resource_id,
@@ -569,18 +461,7 @@ class ProxmoxLXCCoordinator(ProxmoxCoordinator):
                 self.resource_id,
             )
             if isinstance(config_status, dict):
-                for key in sorted(config_status):
-                    if not key.startswith("net"):
-                        continue
-                    iface_name, raw_mac = _extract_lxc_mac(config_status[key])
-                    mac = _normalize_mac(raw_mac)
-                    if not mac:
-                        continue
-                    if iface_name is None:
-                        iface_name = key
-                    mac_addresses[iface_name] = mac
-                if mac_addresses:
-                    primary_mac = next(iter(mac_addresses.values()))
+                mac_addresses, primary_mac = extract_lxc_mac_data(config_status)
             else:
                 LOGGER.debug(
                     "LXC %s config missing or access denied: %s",
@@ -595,7 +476,7 @@ class ProxmoxLXCCoordinator(ProxmoxCoordinator):
             msg = f"LXC {self.resource_id} unable to be found"
             raise UpdateFailed(msg)
 
-        connections = _connections_from_mac_data(mac_addresses, primary_mac)
+        connections = connections_from_mac_data(mac_addresses, primary_mac)
         LOGGER.debug(
             "LXC %s detected connections: %s",
             self.resource_id,
@@ -1247,121 +1128,3 @@ def permission_to_resource(
     if api_category is ProxmoxType.Disk:
         return f"['perm','/nodes/{resource_id}',['Sys.Audit']]"
     return "Unmapped"
-def _normalize_mac(mac: str | None) -> str | None:
-    """Normalize MAC address strings."""
-    if not mac:
-        return None
-    mac = mac.strip().lower()
-    parts = mac.split(":")
-    if len(parts) == 6 and all(len(part) == 2 for part in parts):
-        return mac
-    return None
-
-
-def _extract_qemu_mac(net_value: Any) -> tuple[str | None, str | None]:
-    """Extract interface name and MAC address from QEMU net value."""
-    if not isinstance(net_value, str):
-        return (None, None)
-    iface_name: str | None = None
-    mac: str | None = None
-    segments = [segment.strip() for segment in net_value.split(",") if segment.strip()]
-    if segments:
-        first = segments[0]
-        if "=" in first:
-            _, potential_mac = first.split("=", 1)
-            mac = potential_mac.strip()
-    for part in segments[1:]:
-        if part.startswith("name="):
-            iface_name = part.split("=", 1)[1].strip()
-            break
-    return (iface_name, mac)
-
-
-def _extract_lxc_mac(net_value: Any) -> tuple[str | None, str | None]:
-    """Extract interface name and MAC address from LXC net value."""
-    if not isinstance(net_value, str):
-        return (None, None)
-    iface_name: str | None = None
-    mac: str | None = None
-    for part in (segment.strip() for segment in net_value.split(",") if segment.strip()):
-        if part.startswith("hwaddr="):
-            mac = part.split("=", 1)[1].strip()
-        elif part.startswith("name="):
-            iface_name = part.split("=", 1)[1].strip()
-    return (iface_name, mac)
-
-
-def _extract_node_mac(
-    iface: dict[str, Any], iface_lookup: dict[str | None, dict[str, Any]] | None = None
-) -> str | None:
-    """Extract a MAC for a node interface, including alt-name fallbacks."""
-    candidates: list[str | None] = [
-        iface.get("mac"),
-        iface.get("hwaddr"),
-        iface.get("address"),
-    ]
-    for alt in iface.get("altnames", []) or []:
-        if isinstance(alt, str):
-            if _normalize_mac(alt):
-                candidates.append(alt)
-            elif len(alt) == 15 and alt[:3] in {"wlx", "enx"}:
-                raw = alt[3:]
-                if all(ch in "0123456789abcdefABCDEF" for ch in raw):
-                    formatted = ":".join(raw[i : i + 2] for i in range(0, 12, 2))
-                    candidates.append(formatted.lower())
-            elif len(alt) == 17 and alt[:3] in {"wlx", "enx"} and ":" in alt:
-                candidates.append(alt[3:])
-
-    if (
-        iface_lookup
-        and isinstance(iface.get("bridge_ports"), str)
-        and (
-            (iface.get("type") or "").lower() == "bridge"
-            or (iface.get("iface") or "").startswith("vmbr")
-        )
-    ):
-        for port in iface["bridge_ports"].split():
-            port_iface = iface_lookup.get(port)
-            if port_iface:
-                port_mac = _extract_node_mac(port_iface, iface_lookup)
-                if port_mac:
-                    candidates.insert(0, port_mac)
-
-    for candidate in candidates:
-        normalized = _normalize_mac(candidate) if candidate else None
-        if normalized:
-            return normalized
-    return None
-
-
-def _interface_priority(iface: dict[str, Any]) -> int:
-    """Return a priority value for interface selection (lower is better)."""
-    iface_name = (iface.get("iface") or iface.get("name") or "").lower()
-    iface_type = (iface.get("type") or "").lower()
-
-    if iface_type == "bridge" or iface_name.startswith("vmbr"):
-        return 5
-    if iface_name.startswith(("en", "eth")):
-        return 0
-    if iface_name.startswith(("wl", "wi")):
-        return 3
-    if iface_type in {"eth", "bond"}:
-        return 1
-    return 4
-
-
-def _connections_from_mac_data(
-    mac_map: dict[str, str] | None, primary_mac: str | None
-) -> set[tuple[str, str]] | None:
-    """Build connection tuples from MAC mapping."""
-    connections: set[tuple[str, str]] = set()
-    if mac_map:
-        for mac in mac_map.values():
-            normalized = _normalize_mac(mac)
-            if normalized:
-                connections.add((CONNECTION_NETWORK_MAC, normalized))
-    if not connections and primary_mac:
-        normalized_primary = _normalize_mac(primary_mac)
-        if normalized_primary:
-            connections.add((CONNECTION_NETWORK_MAC, normalized_primary))
-    return connections or None

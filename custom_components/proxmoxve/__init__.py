@@ -26,7 +26,7 @@ from homeassistant.helpers import (
 from homeassistant.helpers import (
     issue_registry as ir,
 )
-from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC, DeviceInfo
+from homeassistant.helpers.device_registry import DeviceInfo
 from proxmoxer import AuthenticationError
 from proxmoxer.core import ResourceException
 from requests.exceptions import (
@@ -62,6 +62,7 @@ from .const import (
     VERSION_REMOVE_YAML,
     ProxmoxType,
 )
+from .device_connections import connections_from_mac_data
 from .coordinator import (
     ProxmoxDiskCoordinator,
     ProxmoxLXCCoordinator,
@@ -808,17 +809,10 @@ def device_info(
         if (coordinator_data := coordinator.data) is not None:
             vm_name = coordinator_data.name
             node = coordinator_data.node
-            mac_map = getattr(coordinator_data, "mac_addresses", {})
-            if mac_map:
-                connections = {
-                    (CONNECTION_NETWORK_MAC, mac.lower())
-                    for mac in mac_map.values()
-                    if mac
-                }
-            elif getattr(coordinator_data, "primary_mac", None):
-                connections = {
-                    (CONNECTION_NETWORK_MAC, coordinator_data.primary_mac.lower())
-                }
+            connections = connections_from_mac_data(
+                getattr(coordinator_data, "mac_addresses", None),
+                getattr(coordinator_data, "primary_mac", None),
+            )
 
         name = f"{api_category.upper()} {vm_name} ({resource_id})"
         identifier = f"{config_entry.entry_id}_{api_category.upper()}_{resource_id}"
@@ -848,17 +842,10 @@ def device_info(
         if (coordinator_data := coordinator.data) is not None:
             model_processor = coordinator_data.model
             proxmox_version = f"Proxmox {coordinator_data.version}"
-            mac_map = getattr(coordinator_data, "mac_addresses", {})
-            if mac_map:
-                connections = {
-                    (CONNECTION_NETWORK_MAC, mac.lower())
-                    for mac in mac_map.values()
-                    if mac
-                }
-            elif getattr(coordinator_data, "primary_mac", None):
-                connections = {
-                    (CONNECTION_NETWORK_MAC, coordinator_data.primary_mac.lower())
-                }
+            connections = connections_from_mac_data(
+                getattr(coordinator_data, "mac_addresses", None),
+                getattr(coordinator_data, "primary_mac", None),
+            )
 
         name = f"{ProxmoxType.Node.capitalize()} {node}"
         identifier = f"{config_entry.entry_id}_{ProxmoxType.Node.upper()}_{node}"
