@@ -61,7 +61,7 @@ class ProxmoxCoordinator(
 
 
 class ProxmoxNodeCoordinator(ProxmoxCoordinator):
-    """Proxmox VE Node data update coordinator. """
+    """Proxmox VE Node data update coordinator."""
 
     def __init__(
         self,
