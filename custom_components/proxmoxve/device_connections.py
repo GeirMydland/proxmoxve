@@ -307,7 +307,9 @@ async def async_get_node_mac_data(
             if isinstance(entry, dict)
         }
         iface_details_cache: dict[str, dict[str, Any] | None] = {}
-        primary_candidates: list[tuple[str, tuple[int, int, int, str]]] = []
+        candidate_entries: list[
+            tuple[str, str, bool, tuple[int, int, int, str], dict[str, Any]]
+        ] = []
 
         for iface in network_status:
             LOGGER.debug("Node %s network iface %s", node_name, iface)
@@ -344,18 +346,27 @@ async def async_get_node_mac_data(
             if not mac:
                 continue
             iface_name = iface.get("iface") or iface.get("name") or mac
-            mac_addresses[iface_name] = mac
+            is_wireless = _iface_is_wireless(iface)
             score = (
                 0 if _host_matches_interface(host_addresses, iface) else 1,
-                1 if _iface_is_wireless(iface) else 0,
+                1 if is_wireless else 0,
                 0 if _iface_is_active(iface) else 1,
                 _interface_priority(iface),
                 iface_name,
             )
-            primary_candidates.append((mac, score))
+            candidate_entries.append((iface_name, mac, is_wireless, score, iface.copy()))
 
-        if primary_candidates:
-            primary_mac = min(primary_candidates, key=lambda item: item[1])[0]
+        if candidate_entries:
+            has_wired = any(not entry[2] for entry in candidate_entries)
+            filtered_candidates = [
+                entry for entry in candidate_entries if not has_wired or not entry[2]
+            ]
+
+            for iface_name, mac, *_ in filtered_candidates:
+                mac_addresses[iface_name] = mac
+
+            prioritized_candidates = filtered_candidates if filtered_candidates else candidate_entries
+            primary_mac = min(prioritized_candidates, key=lambda item: item[3])[1]
         elif mac_addresses:
             primary_mac = next(iter(mac_addresses.values()))
     else:
