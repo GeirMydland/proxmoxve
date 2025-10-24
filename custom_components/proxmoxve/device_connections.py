@@ -348,7 +348,7 @@ async def async_get_node_mac_data(
         }
         iface_details_cache: dict[str, dict[str, Any] | None] = {}
         candidate_entries: list[
-            tuple[str, str, int, tuple[int, int, int, str], dict[str, Any]]
+            tuple[str, str, bool, bool, bool, bool, tuple[int, int, int, str], dict[str, Any]]
         ] = []
 
         for iface in network_status:
@@ -386,14 +386,26 @@ async def async_get_node_mac_data(
             if not mac:
                 continue
             iface_name = iface.get("iface") or iface.get("name") or mac
-            category = _iface_category(host_addresses, iface)
+            is_wireless = _iface_is_wireless(iface)
+            has_host = _host_matches_interface(host_addresses, iface)
+            is_active = _iface_is_active(iface)
+            iface_name_lower = iface_name.lower()
+            iface_type = (iface.get("type") or "").lower()
+            is_bridge = iface_type == "bridge" or iface_name_lower.startswith("vmbr")
+            is_physical = iface_name_lower.startswith(("en", "eth")) or iface_type in {"eth", "bond"}
+
             score = (
-                category,
-                0 if _iface_is_active(iface) else 1,
+                0 if has_host else 1,
+                0 if is_active else 1,
+                0
+                if is_physical
+                else (1 if is_bridge else 2),
                 _interface_priority(iface),
-                iface_name,
+                iface_name_lower,
             )
-            candidate_entries.append((iface_name, mac, category, score, iface.copy()))
+            candidate_entries.append(
+                (iface_name, mac, is_wireless, has_host, is_active, is_bridge, score, iface.copy())
+            )
 
         if candidate_entries:
             prioritized_set = candidate_entries
@@ -401,24 +413,33 @@ async def async_get_node_mac_data(
                 bridge_candidates = [
                     entry
                     for entry in candidate_entries
-                    if (entry[0] or "").lower().startswith("vmbr")
+                    if not entry[2]
                 ]
                 if bridge_candidates:
                     prioritized_set = bridge_candidates
-            best_prioritized = min(entry[2] for entry in prioritized_set)
+
+            host_matches = [entry for entry in prioritized_set if entry[3]]
+            if host_matches:
+                prioritized_set = host_matches
+
+            active_candidates = [entry for entry in prioritized_set if entry[4]]
+            if active_candidates:
+                prioritized_set = active_candidates
+
+            best_prioritized = min(entry[6] for entry in prioritized_set)
             filtered_candidates = [
-                entry for entry in prioritized_set if entry[2] == best_prioritized
+                entry for entry in prioritized_set if entry[6] == best_prioritized
             ]
             if not filtered_candidates:
                 filtered_candidates = prioritized_set
 
-            best_category = best_prioritized
-            for iface_name, mac, category, *_ in filtered_candidates:
-                if category < best_category + 10:
-                    mac_addresses[iface_name] = mac
+            for iface_name, mac, *_ in filtered_candidates:
+                mac_addresses[iface_name] = mac
+
+            best_entry = min(filtered_candidates, key=lambda item: item[6])
+            primary_mac = best_entry[1]
 
             prioritized_candidates = filtered_candidates if filtered_candidates else prioritized_set
-            primary_mac = min(prioritized_candidates, key=lambda item: item[3])[1]
         elif mac_addresses:
             primary_mac = next(iter(mac_addresses.values()))
     else:
