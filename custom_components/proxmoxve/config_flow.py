@@ -31,6 +31,7 @@ from .const import (
     CONF_NODES,
     CONF_QEMU,
     CONF_REALM,
+    CONF_IGNORE_WIFI,
     CONF_STORAGE,
     CONF_TOKEN_NAME,
     CONF_VMS,
@@ -290,6 +291,13 @@ class ProxmoxOptionsFlowHandler(config_entries.OptionsFlow):
                                 CONF_DISKS_ENABLE, True
                             ),
                         ): selector.BooleanSelector(),
+                        vol.Optional(
+                            CONF_IGNORE_WIFI,
+                            default=self.config_entry.options.get(
+                                CONF_IGNORE_WIFI,
+                                self.config_entry.data.get(CONF_IGNORE_WIFI, True),
+                            ),
+                        ): selector.BooleanSelector(),
                     }
                 ),
             )
@@ -308,8 +316,24 @@ class ProxmoxOptionsFlowHandler(config_entries.OptionsFlow):
                 CONF_STORAGE: new_selection[CONF_STORAGE],
             }
         )
+        config_data[CONF_IGNORE_WIFI] = user_input.get(
+            CONF_IGNORE_WIFI,
+            config_data.get(CONF_IGNORE_WIFI, True),
+        )
 
-        options_data = {CONF_DISKS_ENABLE: user_input.get(CONF_DISKS_ENABLE)}
+        options_data = {
+            CONF_DISKS_ENABLE: user_input.get(
+                CONF_DISKS_ENABLE,
+                self.config_entry.options.get(CONF_DISKS_ENABLE, True),
+            ),
+            CONF_IGNORE_WIFI: user_input.get(
+                CONF_IGNORE_WIFI,
+                self.config_entry.options.get(
+                    CONF_IGNORE_WIFI,
+                    config_data.get(CONF_IGNORE_WIFI, True),
+                ),
+            ),
+        }
 
         self.hass.config_entries.async_update_entry(
             self.config_entry, data=config_data, options=options_data
@@ -659,6 +683,8 @@ class ProxmoxVEConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             },
         )
 
+        config.setdefault(CONF_IGNORE_WIFI, True)
+
         return self.async_create_entry(
             title=(f"{config.get(CONF_HOST)}:{config.get(CONF_PORT)}"),
             data=config,
@@ -945,6 +971,10 @@ class ProxmoxVEConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                             CONF_DISKS_ENABLE,
                             default=True,
                         ): selector.BooleanSelector(),
+                        vol.Optional(
+                            CONF_IGNORE_WIFI,
+                            default=True,
+                        ): selector.BooleanSelector(),
                     }
                 ),
             )
@@ -985,10 +1015,15 @@ class ProxmoxVEConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             for storage_selection in storage_user:
                 self._config[CONF_STORAGE].append(storage_selection)
 
+        self._config[CONF_IGNORE_WIFI] = user_input.get(CONF_IGNORE_WIFI, True)
+
         return self.async_create_entry(
             title=(f"{self._config[CONF_HOST]}:{self._config[CONF_PORT]}"),
             data=self._config,
-            options={CONF_DISKS_ENABLE: user_input.get(CONF_DISKS_ENABLE)},
+            options={
+                CONF_DISKS_ENABLE: user_input.get(CONF_DISKS_ENABLE, True),
+                CONF_IGNORE_WIFI: user_input.get(CONF_IGNORE_WIFI, True),
+            },
         )
 
     @staticmethod

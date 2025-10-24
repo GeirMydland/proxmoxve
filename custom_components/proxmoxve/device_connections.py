@@ -13,7 +13,7 @@ from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC
 from homeassistant.helpers.typing import UNDEFINED, UndefinedType
 from homeassistant.helpers.update_coordinator import UpdateFailed
 
-from .const import DOMAIN, LOGGER, ProxmoxType
+from .const import CONF_IGNORE_WIFI, DOMAIN, LOGGER, ProxmoxType
 
 
 def _normalize_mac(mac: str | None) -> str | None:
@@ -333,6 +333,12 @@ async def async_get_node_mac_data(
         hass,
         str(config_entry.data.get(CONF_HOST, "")).strip(),
     )
+    ignore_wifi = bool(
+        config_entry.options.get(
+            CONF_IGNORE_WIFI,
+            config_entry.data.get(CONF_IGNORE_WIFI, False),
+        )
+    )
 
     if isinstance(network_status, list):
         iface_lookup = {
@@ -340,12 +346,22 @@ async def async_get_node_mac_data(
             for entry in network_status
             if isinstance(entry, dict)
         }
+        vmbr_only = {
+            key: value
+            for key, value in iface_lookup.items()
+            if isinstance(key, str) and key.startswith("vmbr")
+        }
+        iter_ifaces: Iterable[dict[str, Any]] = (
+            vmbr_only.values()
+            if ignore_wifi and vmbr_only
+            else network_status
+        )
         iface_details_cache: dict[str, dict[str, Any] | None] = {}
         candidate_entries: list[
             tuple[str, str, int, tuple[int, int, int, str], dict[str, Any]]
         ] = []
 
-        for iface in network_status:
+        for iface in iter_ifaces:
             LOGGER.debug("Node %s network iface %s", node_name, iface)
             mac = _extract_node_mac(iface, iface_lookup)
             if not mac:

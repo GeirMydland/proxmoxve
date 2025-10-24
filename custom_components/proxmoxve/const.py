@@ -12,6 +12,7 @@ CONF_NODES = "nodes"
 CONF_VMS = "vms"
 CONF_CONTAINERS = "containers"
 CONF_DISKS_ENABLE = "disks_enable"
+CONF_IGNORE_WIFI = "ignore_wifi_interfaces"
 
 COORDINATORS = "coordinators"
 
