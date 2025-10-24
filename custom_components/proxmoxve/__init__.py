@@ -370,17 +370,19 @@ async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) ->
                         )
                     },
                 )
-                dev_reg.async_update_device(
-                    device_id=device.id,
-                    new_identifiers={
-                        (
-                            DOMAIN,
+                canonical_id = disk.get("wwn") or disk.get("by_id_link") or disk.get("serial")
+                if canonical_id:
+                    dev_reg.async_update_device(
+                        device_id=device.id,
+                        new_identifiers={
                             (
-                                f"{config_entry.entry_id}_{ProxmoxType.Disk.upper()}_{node}_{disk["wwn"] if "wwn" in disk else disk["by_id_link"] if "by_id_link" in disk else disk["serial"]}"
-                            ),
-                        )
-                    },
-                )
+                                DOMAIN,
+                                (
+                                    f"{config_entry.entry_id}_{ProxmoxType.Disk.upper()}_{node}_{canonical_id}"
+                                ),
+                            )
+                        },
+                    )
 
     if config_entry.version == 6:
         entry_data = config_entry.data
@@ -421,28 +423,33 @@ async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) ->
 
             dev_reg = dr.async_get(hass)
             for disk in disks if disks is not None else []:
+                primary_id = disk.get("by_id_link") or disk.get("serial") or disk.get("devpath")
+                if not primary_id:
+                    continue
                 device = dev_reg.async_get_or_create(
                     config_entry_id=config_entry.entry_id,
                     identifiers={
                         (
                             DOMAIN,
                             (
-                                f"{config_entry.entry_id}_{ProxmoxType.Disk.upper()}_{node}_{disk["by_id_link"] if "by_id_link" in disk else disk["serial"]}"
+                                f"{config_entry.entry_id}_{ProxmoxType.Disk.upper()}_{node}_{primary_id}"
                             ),
                         )
                     },
                 )
-                dev_reg.async_update_device(
-                    device_id=device.id,
-                    new_identifiers={
-                        (
-                            DOMAIN,
+                canonical_id = disk.get("wwn") or disk.get("by_id_link") or disk.get("serial")
+                if canonical_id and canonical_id != primary_id:
+                    dev_reg.async_update_device(
+                        device_id=device.id,
+                        new_identifiers={
                             (
-                                f"{config_entry.entry_id}_{ProxmoxType.Disk.upper()}_{node}_{disk["wwn"] if "wwn" in disk else disk["by_id_link"] if "by_id_link" in disk else disk["serial"]}"
-                            ),
-                        )
-                    },
-                )
+                                DOMAIN,
+                                (
+                                    f"{config_entry.entry_id}_{ProxmoxType.Disk.upper()}_{node}_{canonical_id}"
+                                ),
+                            )
+                        },
+                    )
 
         data_new = {
             CONF_HOST: config_entry.data.get(CONF_HOST),

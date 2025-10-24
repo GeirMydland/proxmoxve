@@ -772,16 +772,12 @@ class ProxmoxDiskCoordinator(ProxmoxCoordinator):
 
     def text_to_smart_id(self, text: str) -> str:
         """Update data  for Proxmox Disk."""
-        match text:
-            case "Temperature":
-                smart_id = "194"
-            case "Power Cycles":
-                smart_id = "12"
-            case "Power On Hours":
-                smart_id = "9"
-            case _:
-                smart_id = "0"
-        return smart_id
+        smart_map = {
+            "Temperature": "194",
+            "Power Cycles": "12",
+            "Power On Hours": "9",
+        }
+        return smart_map.get(text, "0")
 
     async def _async_update_data(self) -> ProxmoxDiskData:
         """Update data  for Proxmox Disk."""
@@ -829,7 +825,10 @@ class ProxmoxDiskCoordinator(ProxmoxCoordinator):
                 or ("serial" in disk and disk["serial"] == self.resource_id)
             ):
                 disk_attributes = {}
-                api_path = f"nodes/{self.node_name}/disks/smart?disk={disk["devpath"]}"
+                devpath = disk.get("devpath")
+                if not devpath:
+                    continue
+                api_path = f"nodes/{self.node_name}/disks/smart?disk={devpath}"
                 try:
                     disk_attributes_api = await self.hass.async_add_executor_job(
                         poll_api,
