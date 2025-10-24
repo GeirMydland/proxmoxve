@@ -274,6 +274,40 @@ def _host_matches_interface(host_addresses: Iterable[str], iface: dict[str, Any]
     return any(address in iface_addresses for address in normalized_host_addresses)
 
 
+def _iface_category(host_addresses: Iterable[str], iface: dict[str, Any]) -> int:
+    """Return category ranking (lower is better) for an interface."""
+    is_wireless = _iface_is_wireless(iface)
+    has_host = _host_matches_interface(host_addresses, iface)
+    iface_name = (iface.get("iface") or iface.get("name") or "").lower()
+    iface_type = (iface.get("type") or "").lower()
+    has_ip = bool(_iface_addresses(iface))
+    is_bridge = iface_type == "bridge" or iface_name.startswith("vmbr")
+    is_physical = iface_name.startswith(("en", "eth")) or iface_type in {"eth", "bond"}
+
+    if has_host and not is_wireless:
+        base = 0
+    elif is_bridge and has_ip:
+        base = 1
+    elif is_physical and has_ip:
+        base = 2
+    elif is_bridge:
+        base = 3
+    elif is_physical:
+        base = 4
+    elif has_ip:
+        base = 5
+    else:
+        base = 6
+
+    if is_wireless:
+        # Strongly penalize wireless interfaces regardless of other traits.
+        base += 10
+        if has_host:
+            base += 2
+
+    return base
+
+
 async def async_get_node_mac_data(
     hass,
     config_entry,
@@ -308,7 +342,7 @@ async def async_get_node_mac_data(
         }
         iface_details_cache: dict[str, dict[str, Any] | None] = {}
         candidate_entries: list[
-            tuple[str, str, bool, tuple[int, int, int, str], dict[str, Any]]
+            tuple[str, str, int, tuple[int, int, int, str], dict[str, Any]]
         ] = []
 
         for iface in network_status:
@@ -346,24 +380,26 @@ async def async_get_node_mac_data(
             if not mac:
                 continue
             iface_name = iface.get("iface") or iface.get("name") or mac
-            is_wireless = _iface_is_wireless(iface)
+            category = _iface_category(host_addresses, iface)
             score = (
-                0 if _host_matches_interface(host_addresses, iface) else 1,
-                1 if is_wireless else 0,
+                category,
                 0 if _iface_is_active(iface) else 1,
                 _interface_priority(iface),
                 iface_name,
             )
-            candidate_entries.append((iface_name, mac, is_wireless, score, iface.copy()))
+            candidate_entries.append((iface_name, mac, category, score, iface.copy()))
 
         if candidate_entries:
-            has_wired = any(not entry[2] for entry in candidate_entries)
+            best_category = min(entry[2] for entry in candidate_entries)
             filtered_candidates = [
-                entry for entry in candidate_entries if not has_wired or not entry[2]
+                entry for entry in candidate_entries if entry[2] == best_category
             ]
+            if not filtered_candidates:
+                filtered_candidates = candidate_entries
 
-            for iface_name, mac, *_ in filtered_candidates:
-                mac_addresses[iface_name] = mac
+            for iface_name, mac, category, *_ in filtered_candidates:
+                if category < best_category + 10:
+                    mac_addresses[iface_name] = mac
 
             prioritized_candidates = filtered_candidates if filtered_candidates else candidate_entries
             primary_mac = min(prioritized_candidates, key=lambda item: item[3])[1]
