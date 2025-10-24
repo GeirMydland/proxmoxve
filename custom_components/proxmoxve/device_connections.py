@@ -161,6 +161,17 @@ def _interface_priority(iface: dict[str, Any]) -> int:
     return 5
 
 
+def _iface_is_wireless(iface: dict[str, Any]) -> bool:
+    """Return True if interface appears to be wireless."""
+    iface_name = (iface.get("iface") or iface.get("name") or "").lower()
+    iface_type = (iface.get("type") or "").lower()
+    if iface_name.startswith(("wl", "wi", "ath", "air", "wlan")):
+        return True
+    if iface_type in {"wireless", "wifi", "wlan"}:
+        return True
+    return False
+
+
 def _iface_addresses(iface: dict[str, Any]) -> set[str]:
     """Return lowercase string addresses found on an interface entry."""
     addresses: set[str] = set()
@@ -336,6 +347,7 @@ async def async_get_node_mac_data(
             mac_addresses[iface_name] = mac
             score = (
                 0 if _host_matches_interface(host_addresses, iface) else 1,
+                1 if _iface_is_wireless(iface) else 0,
                 0 if _iface_is_active(iface) else 1,
                 _interface_priority(iface),
                 iface_name,
