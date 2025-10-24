@@ -346,22 +346,12 @@ async def async_get_node_mac_data(
             for entry in network_status
             if isinstance(entry, dict)
         }
-        vmbr_only = {
-            key: value
-            for key, value in iface_lookup.items()
-            if isinstance(key, str) and key.startswith("vmbr")
-        }
-        iter_ifaces: Iterable[dict[str, Any]] = (
-            vmbr_only.values()
-            if ignore_wifi and vmbr_only
-            else network_status
-        )
         iface_details_cache: dict[str, dict[str, Any] | None] = {}
         candidate_entries: list[
             tuple[str, str, int, tuple[int, int, int, str], dict[str, Any]]
         ] = []
 
-        for iface in iter_ifaces:
+        for iface in network_status:
             LOGGER.debug("Node %s network iface %s", node_name, iface)
             mac = _extract_node_mac(iface, iface_lookup)
             if not mac:
@@ -406,18 +396,28 @@ async def async_get_node_mac_data(
             candidate_entries.append((iface_name, mac, category, score, iface.copy()))
 
         if candidate_entries:
-            best_category = min(entry[2] for entry in candidate_entries)
+            prioritized_set = candidate_entries
+            if ignore_wifi:
+                bridge_candidates = [
+                    entry
+                    for entry in candidate_entries
+                    if (entry[0] or "").lower().startswith("vmbr")
+                ]
+                if bridge_candidates:
+                    prioritized_set = bridge_candidates
+            best_prioritized = min(entry[2] for entry in prioritized_set)
             filtered_candidates = [
-                entry for entry in candidate_entries if entry[2] == best_category
+                entry for entry in prioritized_set if entry[2] == best_prioritized
             ]
             if not filtered_candidates:
-                filtered_candidates = candidate_entries
+                filtered_candidates = prioritized_set
 
+            best_category = best_prioritized
             for iface_name, mac, category, *_ in filtered_candidates:
                 if category < best_category + 10:
                     mac_addresses[iface_name] = mac
 
-            prioritized_candidates = filtered_candidates if filtered_candidates else candidate_entries
+            prioritized_candidates = filtered_candidates if filtered_candidates else prioritized_set
             primary_mac = min(prioritized_candidates, key=lambda item: item[3])[1]
         elif mac_addresses:
             primary_mac = next(iter(mac_addresses.values()))
