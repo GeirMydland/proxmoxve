@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from homeassistant.const import CONF_HOST
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC
 from homeassistant.helpers.typing import UNDEFINED, UndefinedType
@@ -157,6 +158,50 @@ def _interface_priority(iface: dict[str, Any]) -> int:
     return 5
 
 
+def _iface_addresses(iface: dict[str, Any]) -> set[str]:
+    """Return lowercase string addresses found on an interface entry."""
+    addresses: set[str] = set()
+    for key in ("address", "address6", "ip", "ip6"):
+        value = iface.get(key)
+        if isinstance(value, str):
+            addr = value.strip().lower()
+            if addr:
+                addresses.add(addr)
+    for key in ("cidr", "cidr6"):
+        value = iface.get(key)
+        if isinstance(value, str) and "/" in value:
+            addr = value.split("/", 1)[0].strip().lower()
+            if addr:
+                addresses.add(addr)
+    return addresses
+
+
+def _iface_is_active(iface: dict[str, Any]) -> bool:
+    """Return True if interface appears to be administratively up."""
+    state = str(iface.get("state") or iface.get("status") or "").lower()
+    if state in {"up", "active", "connected", "running"}:
+        return True
+    active_flag = iface.get("active")
+    if isinstance(active_flag, bool):
+        return active_flag
+    if isinstance(active_flag, (int, float)):
+        return active_flag != 0
+    if isinstance(active_flag, str):
+        return active_flag.strip().lower() in {"1", "true", "yes", "on"}
+    return False
+
+
+def _host_matches_interface(host: str, iface: dict[str, Any]) -> bool:
+    """Return True if interface carries the configured host address."""
+    if not host:
+        return False
+    host_normalized = host.strip().lower()
+    if not host_normalized:
+        return False
+    iface_addresses = _iface_addresses(iface)
+    return host_normalized in iface_addresses
+
+
 async def async_get_node_mac_data(
     hass,
     config_entry,
@@ -178,6 +223,8 @@ async def async_get_node_mac_data(
     mac_addresses: dict[str, str] = {}
     primary_mac: str | None = None
 
+    host_address = str(config_entry.data.get(CONF_HOST, "")).strip().lower()
+
     if isinstance(network_status, list):
         iface_lookup = {
             (entry.get("iface") or entry.get("name")): entry
@@ -185,7 +232,7 @@ async def async_get_node_mac_data(
             if isinstance(entry, dict)
         }
         iface_details_cache: dict[str, dict[str, Any] | None] = {}
-        primary_candidates: list[tuple[str, int]] = []
+        primary_candidates: list[tuple[str, tuple[int, int, int, str]]] = []
 
         for iface in network_status:
             LOGGER.debug("Node %s network iface %s", node_name, iface)
@@ -223,8 +270,13 @@ async def async_get_node_mac_data(
                 continue
             iface_name = iface.get("iface") or iface.get("name") or mac
             mac_addresses[iface_name] = mac
-            priority = _interface_priority(iface)
-            primary_candidates.append((mac, priority))
+            score = (
+                0 if _host_matches_interface(host_address, iface) else 1,
+                0 if _iface_is_active(iface) else 1,
+                _interface_priority(iface),
+                iface_name,
+            )
+            primary_candidates.append((mac, score))
 
         if primary_candidates:
             primary_mac = min(primary_candidates, key=lambda item: item[1])[0]
