@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable
+import ipaddress
+import socket
+from typing import Any, Callable, Iterable, Set
+from urllib.parse import urlparse
 
 from homeassistant.const import CONF_HOST
 from homeassistant.helpers import device_registry as dr
@@ -191,15 +194,73 @@ def _iface_is_active(iface: dict[str, Any]) -> bool:
     return False
 
 
-def _host_matches_interface(host: str, iface: dict[str, Any]) -> bool:
-    """Return True if interface carries the configured host address."""
+async def _async_host_addresses(hass, host: str) -> Set[str]:
+    """Resolve host string into a set of lowercase addresses."""
     if not host:
-        return False
-    host_normalized = host.strip().lower()
-    if not host_normalized:
+        return set()
+
+    host = host.strip()
+    if not host:
+        return set()
+
+    parsed = urlparse(host)
+    if parsed.scheme:
+        hostname = parsed.hostname or host
+    else:
+        hostname = host
+
+    hostname = hostname.strip("[]").strip()
+    addresses: set[str] = set()
+
+    try:
+        ip_obj = ipaddress.ip_address(hostname)
+        addresses.add(ip_obj.compressed.lower())
+        return addresses
+    except ValueError:
+        pass
+
+    # Host might be IPv6 with zone id (e.g. fe80::1%eth0)
+    if "%" in hostname:
+        without_zone = hostname.split("%", 1)[0]
+        try:
+            ip_obj = ipaddress.ip_address(without_zone)
+            addresses.add(ip_obj.compressed.lower())
+            return addresses
+        except ValueError:
+            hostname = without_zone
+
+    try:
+        infos = await hass.async_add_executor_job(
+            socket.getaddrinfo,
+            hostname,
+            None,
+            socket.AF_UNSPEC,
+            socket.SOCK_STREAM,
+        )
+    except socket.gaierror:
+        return set()
+
+    for info in infos:
+        sockaddr = info[4]
+        if not sockaddr:
+            continue
+        addr = sockaddr[0]
+        try:
+            ip_obj = ipaddress.ip_address(addr)
+            addresses.add(ip_obj.compressed.lower())
+        except ValueError:
+            addresses.add(addr.lower())
+
+    return addresses
+
+
+def _host_matches_interface(host_addresses: Iterable[str], iface: dict[str, Any]) -> bool:
+    """Return True if interface carries any of the configured host addresses."""
+    normalized_host_addresses = {addr.lower() for addr in host_addresses if addr}
+    if not normalized_host_addresses:
         return False
     iface_addresses = _iface_addresses(iface)
-    return host_normalized in iface_addresses
+    return any(address in iface_addresses for address in normalized_host_addresses)
 
 
 async def async_get_node_mac_data(
@@ -223,7 +284,10 @@ async def async_get_node_mac_data(
     mac_addresses: dict[str, str] = {}
     primary_mac: str | None = None
 
-    host_address = str(config_entry.data.get(CONF_HOST, "")).strip().lower()
+    host_addresses = await _async_host_addresses(
+        hass,
+        str(config_entry.data.get(CONF_HOST, "")).strip(),
+    )
 
     if isinstance(network_status, list):
         iface_lookup = {
@@ -271,7 +335,7 @@ async def async_get_node_mac_data(
             iface_name = iface.get("iface") or iface.get("name") or mac
             mac_addresses[iface_name] = mac
             score = (
-                0 if _host_matches_interface(host_address, iface) else 1,
+                0 if _host_matches_interface(host_addresses, iface) else 1,
                 0 if _iface_is_active(iface) else 1,
                 _interface_priority(iface),
                 iface_name,
