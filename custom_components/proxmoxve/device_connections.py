@@ -336,7 +336,7 @@ async def async_get_node_mac_data(
     ignore_wifi = bool(
         config_entry.options.get(
             CONF_IGNORE_WIFI,
-            config_entry.data.get(CONF_IGNORE_WIFI, False),
+            config_entry.data.get(CONF_IGNORE_WIFI, True),
         )
     )
 
@@ -347,9 +347,7 @@ async def async_get_node_mac_data(
             if isinstance(entry, dict)
         }
         iface_details_cache: dict[str, dict[str, Any] | None] = {}
-        candidate_entries: list[
-            tuple[str, str, bool, bool, bool, bool, tuple[int, int, int, str], dict[str, Any]]
-        ] = []
+        candidate_entries: list[dict[str, Any]] = []
 
         for iface in network_status:
             LOGGER.debug("Node %s network iface %s", node_name, iface)
@@ -386,60 +384,47 @@ async def async_get_node_mac_data(
             if not mac:
                 continue
             iface_name = iface.get("iface") or iface.get("name") or mac
-            is_wireless = _iface_is_wireless(iface)
-            has_host = _host_matches_interface(host_addresses, iface)
-            is_active = _iface_is_active(iface)
             iface_name_lower = iface_name.lower()
             iface_type = (iface.get("type") or "").lower()
-            is_bridge = iface_type == "bridge" or iface_name_lower.startswith("vmbr")
-            is_physical = iface_name_lower.startswith(("en", "eth")) or iface_type in {"eth", "bond"}
-
-            score = (
-                0 if has_host else 1,
-                0 if is_active else 1,
-                0
-                if is_physical
-                else (1 if is_bridge else 2),
-                _interface_priority(iface),
-                iface_name_lower,
-            )
             candidate_entries.append(
-                (iface_name, mac, is_wireless, has_host, is_active, is_bridge, score, iface.copy())
+                {
+                    "iface": iface.copy(),
+                    "name": iface_name,
+                    "name_lower": iface_name_lower,
+                    "mac": mac,
+                    "is_wireless": _iface_is_wireless(iface),
+                    "has_host": _host_matches_interface(host_addresses, iface),
+                    "is_active": _iface_is_active(iface),
+                    "is_bridge": iface_type == "bridge" or iface_name_lower.startswith("vmbr"),
+                    "is_physical": iface_name_lower.startswith(("en", "eth"))
+                    or iface_type in {"eth", "bond"},
+                    "priority": _interface_priority(iface),
+                }
             )
 
         if candidate_entries:
             prioritized_set = candidate_entries
             if ignore_wifi:
-                bridge_candidates = [
-                    entry
-                    for entry in candidate_entries
-                    if not entry[2]
-                ]
-                if bridge_candidates:
-                    prioritized_set = bridge_candidates
+                non_wifi = [entry for entry in candidate_entries if not entry["is_wireless"]]
+                if non_wifi:
+                    prioritized_set = non_wifi
 
-            host_matches = [entry for entry in prioritized_set if entry[3]]
-            if host_matches:
-                prioritized_set = host_matches
+            prioritized_set.sort(
+                key=lambda entry: (
+                    0 if entry["is_bridge"] else (1 if entry["is_physical"] else 2),
+                    0 if entry["has_host"] else 1,
+                    0 if entry["is_active"] else 1,
+                    0 if not entry["is_wireless"] else 1,
+                    entry["priority"],
+                    entry["name_lower"],
+                )
+            )
 
-            active_candidates = [entry for entry in prioritized_set if entry[4]]
-            if active_candidates:
-                prioritized_set = active_candidates
+            for entry in prioritized_set:
+                mac_addresses[entry["name"]] = entry["mac"]
 
-            best_prioritized = min(entry[6] for entry in prioritized_set)
-            filtered_candidates = [
-                entry for entry in prioritized_set if entry[6] == best_prioritized
-            ]
-            if not filtered_candidates:
-                filtered_candidates = prioritized_set
-
-            for iface_name, mac, *_ in filtered_candidates:
-                mac_addresses[iface_name] = mac
-
-            best_entry = min(filtered_candidates, key=lambda item: item[6])
-            primary_mac = best_entry[1]
-
-            prioritized_candidates = filtered_candidates if filtered_candidates else prioritized_set
+            if prioritized_set:
+                primary_mac = prioritized_set[0]["mac"]
         elif mac_addresses:
             primary_mac = next(iter(mac_addresses.values()))
     else:
