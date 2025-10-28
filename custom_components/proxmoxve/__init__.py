@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import warnings
+from threading import BoundedSemaphore
 from typing import TYPE_CHECKING
 
 import homeassistant.helpers.config_validation as cv
@@ -49,9 +50,13 @@ from .const import (
     CONF_QEMU,
     CONF_REALM,
     CONF_STORAGE,
+    CONF_SCAN_INTERVAL,
+    CONF_MAX_PARALLEL_REQUESTS,
     CONF_TOKEN_NAME,
     CONF_VMS,
     COORDINATORS,
+    DEFAULT_MAX_PARALLEL_REQUESTS,
+    DEFAULT_SCAN_INTERVAL,
     DEFAULT_PORT,
     DEFAULT_REALM,
     DEFAULT_VERIFY_SSL,
@@ -59,6 +64,7 @@ from .const import (
     INTEGRATION_TITLE,
     LOGGER,
     PROXMOX_CLIENT,
+    PROXMOX_REQUEST_SEMAPHORE,
     VERSION_REMOVE_YAML,
     ProxmoxType,
 )
@@ -490,6 +496,25 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
     password = entry_data[CONF_PASSWORD]
     verify_ssl = entry_data[CONF_VERIFY_SSL]
 
+    scan_interval = int(
+        config_entry.options.get(
+            CONF_SCAN_INTERVAL,
+            entry_data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
+        )
+    )
+    if scan_interval < 15:
+        scan_interval = 15
+
+    max_parallel_requests = int(
+        config_entry.options.get(
+            CONF_MAX_PARALLEL_REQUESTS, DEFAULT_MAX_PARALLEL_REQUESTS
+        )
+    )
+    if max_parallel_requests < 1:
+        max_parallel_requests = 1
+
+    request_semaphore = BoundedSemaphore(value=max_parallel_requests)
+
     # Construct an API client with the given data for the given host
     proxmox_client = ProxmoxClient(
         host=host,
@@ -536,6 +561,14 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
     ] = {}
     nodes_add_device = []
 
+    config_entry.runtime_data = {
+        PROXMOX_CLIENT: proxmox_client,
+        COORDINATORS: coordinators,
+        CONF_SCAN_INTERVAL: scan_interval,
+        CONF_MAX_PARALLEL_REQUESTS: max_parallel_requests,
+        PROXMOX_REQUEST_SEMAPHORE: request_semaphore,
+    }
+
     resources = await hass.async_add_executor_job(get_api, proxmox, "cluster/resources")
 
     nodes_api = await hass.async_add_executor_job(get_api, proxmox, "nodes")
@@ -554,6 +587,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
                 proxmox=proxmox,
                 api_category=ProxmoxType.Node,
                 node_name=node,
+                update_interval_seconds=scan_interval,
             )
             await coordinator_node.async_refresh()
             coordinators[f"{ProxmoxType.Node}_{node}"] = coordinator_node
@@ -565,6 +599,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
                 proxmox=proxmox,
                 api_category=ProxmoxType.Update,
                 node_name=node,
+                update_interval_seconds=scan_interval,
             )
             await coordinator_updates.async_refresh()
             coordinators[f"{ProxmoxType.Update}_{node}"] = coordinator_updates
@@ -593,6 +628,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
                                 else disk["serial"]
                             )
                         ),
+                        update_interval_seconds=scan_interval,
                     )
                     await coordinator_disk.async_refresh()
                     coordinators_disk.append(coordinator_disk)
@@ -614,6 +650,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
                         api_category=ProxmoxType.ZFS,
                         node_name=node,
                         zfs_id=pool["name"],
+                        update_interval_seconds=scan_interval,
                     )
                     await coordinator_zfs.async_refresh()
                     coordinators_zfs.append(coordinator_zfs)
@@ -653,6 +690,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
                 proxmox=proxmox,
                 api_category=ProxmoxType.QEMU,
                 qemu_id=vm_id,
+                update_interval_seconds=scan_interval,
             )
             await coordinator_qemu.async_refresh()
             coordinators[f"{ProxmoxType.QEMU}_{vm_id}"] = coordinator_qemu
@@ -690,6 +728,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
                 proxmox=proxmox,
                 api_category=ProxmoxType.LXC,
                 container_id=container_id,
+                update_interval_seconds=scan_interval,
             )
             await coordinator_lxc.async_refresh()
             coordinators[f"{ProxmoxType.LXC}_{container_id}"] = coordinator_lxc
@@ -727,6 +766,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
                 proxmox=proxmox,
                 api_category=ProxmoxType.Storage,
                 storage_id=storage_id,
+                update_interval_seconds=scan_interval,
             )
             await coordinator_storage.async_refresh()
             coordinators[f"{ProxmoxType.Storage}_{storage_id}"] = coordinator_storage
@@ -749,10 +789,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
                 },
             )
 
-    config_entry.runtime_data = {
-        PROXMOX_CLIENT: proxmox_client,
-        COORDINATORS: coordinators,
-    }
+    config_entry.runtime_data[COORDINATORS] = coordinators
 
     for node in nodes_add_device:
         device_info(

@@ -36,8 +36,12 @@ from .const import (
     CONF_TOKEN_NAME,
     CONF_VMS,
     COORDINATORS,
+    CONF_MAX_PARALLEL_REQUESTS,
+    CONF_SCAN_INTERVAL,
     DEFAULT_PORT,
     DEFAULT_REALM,
+    DEFAULT_MAX_PARALLEL_REQUESTS,
+    DEFAULT_SCAN_INTERVAL,
     DEFAULT_VERIFY_SSL,
     DOMAIN,
     INTEGRATION_TITLE,
@@ -292,6 +296,34 @@ class ProxmoxOptionsFlowHandler(config_entries.OptionsFlow):
                             ),
                         ): selector.BooleanSelector(),
                         vol.Optional(
+                            CONF_SCAN_INTERVAL,
+                            default=self.config_entry.options.get(
+                                CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL
+                            ),
+                        ): selector.NumberSelector(
+                            selector.NumberSelectorConfig(
+                                min=15,
+                                max=3600,
+                                step=15,
+                                unit_of_measurement="s",
+                                mode=selector.NumberSelectorMode.BOX,
+                            )
+                        ),
+                        vol.Optional(
+                            CONF_MAX_PARALLEL_REQUESTS,
+                            default=self.config_entry.options.get(
+                                CONF_MAX_PARALLEL_REQUESTS,
+                                DEFAULT_MAX_PARALLEL_REQUESTS,
+                            ),
+                        ): selector.NumberSelector(
+                            selector.NumberSelectorConfig(
+                                min=1,
+                                max=10,
+                                step=1,
+                                mode=selector.NumberSelectorMode.BOX,
+                            )
+                        ),
+                        vol.Optional(
                             CONF_IGNORE_WIFI,
                             default=self.config_entry.options.get(
                                 CONF_IGNORE_WIFI,
@@ -325,6 +357,22 @@ class ProxmoxOptionsFlowHandler(config_entries.OptionsFlow):
             CONF_DISKS_ENABLE: user_input.get(
                 CONF_DISKS_ENABLE,
                 self.config_entry.options.get(CONF_DISKS_ENABLE, True),
+            ),
+            CONF_SCAN_INTERVAL: int(
+                user_input.get(
+                    CONF_SCAN_INTERVAL,
+                    self.config_entry.options.get(
+                        CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL
+                    ),
+                )
+            ),
+            CONF_MAX_PARALLEL_REQUESTS: int(
+                user_input.get(
+                    CONF_MAX_PARALLEL_REQUESTS,
+                    self.config_entry.options.get(
+                        CONF_MAX_PARALLEL_REQUESTS, DEFAULT_MAX_PARALLEL_REQUESTS
+                    ),
+                )
             ),
             CONF_IGNORE_WIFI: user_input.get(
                 CONF_IGNORE_WIFI,

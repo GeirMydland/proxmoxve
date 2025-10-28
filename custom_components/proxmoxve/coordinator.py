@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -24,7 +25,14 @@ from requests.exceptions import (
 )
 
 from .api import get_api
-from .const import CONF_NODE, DOMAIN, LOGGER, UPDATE_INTERVAL, ProxmoxType
+from .const import (
+    CONF_NODE,
+    DOMAIN,
+    LOGGER,
+    PROXMOX_REQUEST_SEMAPHORE,
+    UPDATE_INTERVAL,
+    ProxmoxType,
+)
 from .device_connections import (
     async_get_node_mac_data,
     connections_from_mac_data,
@@ -69,13 +77,14 @@ class ProxmoxNodeCoordinator(ProxmoxCoordinator):
         proxmox: ProxmoxAPI,
         api_category: str,
         node_name: str,
+        update_interval_seconds: int = UPDATE_INTERVAL,
     ) -> None:
         """Initialize the Proxmox Node coordinator."""
         super().__init__(
             hass,
             LOGGER,
             name=f"proxmox_coordinator_{api_category}_{node_name}",
-            update_interval=timedelta(seconds=UPDATE_INTERVAL),
+            update_interval=timedelta(seconds=update_interval_seconds),
         )
 
         self.hass = hass
@@ -282,13 +291,14 @@ class ProxmoxQEMUCoordinator(ProxmoxCoordinator):
         proxmox: ProxmoxAPI,
         api_category: str,
         qemu_id: int,
+        update_interval_seconds: int = UPDATE_INTERVAL,
     ) -> None:
         """Initialize the Proxmox QEMU coordinator."""
         super().__init__(
             hass,
             LOGGER,
             name=f"proxmox_coordinator_{api_category}_{qemu_id}",
-            update_interval=timedelta(seconds=UPDATE_INTERVAL),
+            update_interval=timedelta(seconds=update_interval_seconds),
         )
 
         self.hass = hass
@@ -401,13 +411,14 @@ class ProxmoxLXCCoordinator(ProxmoxCoordinator):
         proxmox: ProxmoxAPI,
         api_category: str,
         container_id: int,
+        update_interval_seconds: int = UPDATE_INTERVAL,
     ) -> None:
         """Initialize the Proxmox LXC coordinator."""
         super().__init__(
             hass,
             LOGGER,
             name=f"proxmox_coordinator_{api_category}_{container_id}",
-            update_interval=timedelta(seconds=UPDATE_INTERVAL),
+            update_interval=timedelta(seconds=update_interval_seconds),
         )
 
         self.hass = hass
@@ -523,13 +534,14 @@ class ProxmoxStorageCoordinator(ProxmoxCoordinator):
         proxmox: ProxmoxAPI,
         api_category: str,
         storage_id: str,
+        update_interval_seconds: int = UPDATE_INTERVAL,
     ) -> None:
         """Initialize the Proxmox Storage coordinator."""
         super().__init__(
             hass,
             LOGGER,
             name=f"proxmox_coordinator_{api_category}_{storage_id}",
-            update_interval=timedelta(seconds=UPDATE_INTERVAL),
+            update_interval=timedelta(seconds=update_interval_seconds),
         )
 
         self.hass = hass
@@ -604,13 +616,14 @@ class ProxmoxZFSCoordinator(ProxmoxCoordinator):
         api_category: str,
         node_name: str,
         zfs_id: str,
+        update_interval_seconds: int = UPDATE_INTERVAL,
     ) -> None:
         """Initialize the Proxmox ZFS coordinator."""
         super().__init__(
             hass,
             LOGGER,
             name=f"proxmox_coordinator_{api_category}_{zfs_id}",
-            update_interval=timedelta(seconds=UPDATE_INTERVAL),
+            update_interval=timedelta(seconds=update_interval_seconds),
         )
 
         self.hass = hass
@@ -665,13 +678,14 @@ class ProxmoxUpdateCoordinator(ProxmoxCoordinator):
         proxmox: ProxmoxAPI,
         api_category: str,
         node_name: str,
+        update_interval_seconds: int = UPDATE_INTERVAL,
     ) -> None:
         """Initialize the Proxmox Update coordinator."""
         super().__init__(
             hass,
             LOGGER,
             name=f"proxmox_coordinator_{api_category}_{node_name}",
-            update_interval=timedelta(seconds=UPDATE_INTERVAL),
+            update_interval=timedelta(seconds=update_interval_seconds),
         )
 
         self.hass = hass
@@ -755,13 +769,14 @@ class ProxmoxDiskCoordinator(ProxmoxCoordinator):
         api_category: str,
         node_name: str,
         disk_id: str,
+        update_interval_seconds: int = UPDATE_INTERVAL,
     ) -> None:
         """Initialize the Proxmox Disk coordinator."""
         super().__init__(
             hass,
             LOGGER,
             name=f"proxmox_coordinator_{api_category}_{node_name}_{disk_id}",
-            update_interval=timedelta(seconds=UPDATE_INTERVAL),
+            update_interval=timedelta(seconds=update_interval_seconds),
         )
 
         self.hass = hass
@@ -1059,8 +1074,15 @@ def poll_api(
     issue_crete_permissions: bool | None = True,
 ) -> dict[str, Any] | None:
     """Return data from the Proxmox Node API."""
+    runtime_data = getattr(config_entry, "runtime_data", None)
+    semaphore = None
+    if isinstance(runtime_data, dict):
+        semaphore = runtime_data.get(PROXMOX_REQUEST_SEMAPHORE)
+    context_manager = semaphore if semaphore is not None else nullcontext()
+
     try:
-        api_data = get_api(proxmox, api_path)
+        with context_manager:
+            api_data = get_api(proxmox, api_path)
     except AuthenticationError as error:
         raise ConfigEntryAuthFailed from error
     except (
