@@ -377,6 +377,12 @@ async def async_get_node_mac_data(
                     detail = iface_details_cache.get(iface_id)
 
                 if detail:
+                    LOGGER.debug(
+                        "Node %s network iface detail %s: %s",
+                        node_name,
+                        iface_id,
+                        detail,
+                    )
                     iface.update(detail)
                     iface_lookup[iface_id] = iface
                     mac = _extract_node_mac(iface, iface_lookup)
@@ -421,9 +427,24 @@ async def async_get_node_mac_data(
             )
 
             for entry in prioritized_set:
+                LOGGER.debug(
+                    "Node %s candidate iface %s (wireless=%s host=%s active=%s) -> %s",
+                    node_name,
+                    entry["name"],
+                    entry["is_wireless"],
+                    entry["has_host"],
+                    entry["is_active"],
+                    entry["mac"],
+                )
                 mac_addresses[entry["name"]] = entry["mac"]
 
             if prioritized_set:
+                LOGGER.debug(
+                    "Node %s primary selected MAC %s from %s",
+                    node_name,
+                    prioritized_set[0]["mac"],
+                    prioritized_set[0]["name"],
+                )
                 primary_mac = prioritized_set[0]["mac"]
         elif mac_addresses:
             primary_mac = next(iter(mac_addresses.values()))
