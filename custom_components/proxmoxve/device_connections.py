@@ -356,7 +356,7 @@ async def async_get_node_mac_data(
                 iface_id = iface.get("iface") or iface.get("name")
                 detail = None
                 if iface_id and iface_id not in iface_details_cache:
-                    detail_path = f"nodes/{node_name}/network/{iface_id}"
+                    detail_path = f"nodes/{node_name}/network/{iface_id}?current=1"
                     try:
                         detail = await hass.async_add_executor_job(
                             poller,
