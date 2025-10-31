@@ -383,6 +383,28 @@ async def async_get_node_mac_data(
                         iface_id,
                         detail,
                     )
+                    if not any(
+                        key in detail for key in ("mac", "hwaddr", "address")
+                    ):
+                        status_path = f"nodes/{node_name}/network/{iface_id}/status"
+                        status_detail = await hass.async_add_executor_job(
+                            poller,
+                            hass,
+                            config_entry,
+                            proxmox,
+                            status_path,
+                            ProxmoxType.Node,
+                            f"{node_name}_{iface_id}_status",
+                            False,
+                        )
+                        if isinstance(status_detail, dict):
+                            LOGGER.debug(
+                                "Node %s network iface status %s: %s",
+                                node_name,
+                                iface_id,
+                                status_detail,
+                            )
+                            iface.update(status_detail)
                     iface.update(detail)
                     iface_lookup[iface_id] = iface
                     mac = _extract_node_mac(iface, iface_lookup)
