@@ -387,16 +387,25 @@ async def async_get_node_mac_data(
                         key in detail for key in ("mac", "hwaddr", "address")
                     ):
                         status_path = f"nodes/{node_name}/network/{iface_id}/status"
-                        status_detail = await hass.async_add_executor_job(
-                            poller,
-                            hass,
-                            config_entry,
-                            proxmox,
-                            status_path,
-                            ProxmoxType.Node,
-                            f"{node_name}_{iface_id}_status",
-                            False,
-                        )
+                        try:
+                            status_detail = await hass.async_add_executor_job(
+                                poller,
+                                hass,
+                                config_entry,
+                                proxmox,
+                                status_path,
+                                ProxmoxType.Node,
+                                f"{node_name}_{iface_id}_status",
+                                False,
+                            )
+                        except UpdateFailed as err:
+                            LOGGER.debug(
+                                "Node %s network iface status %s request failed: %s",
+                                node_name,
+                                iface_id,
+                                err,
+                            )
+                            status_detail = None
                         if isinstance(status_detail, dict):
                             LOGGER.debug(
                                 "Node %s network iface status %s: %s",
@@ -405,6 +414,13 @@ async def async_get_node_mac_data(
                                 status_detail,
                             )
                             iface.update(status_detail)
+                        elif status_detail is not None:
+                            LOGGER.debug(
+                                "Node %s network iface status %s unexpected payload: %s",
+                                node_name,
+                                iface_id,
+                                status_detail,
+                            )
                     iface.update(detail)
                     iface_lookup[iface_id] = iface
                     mac = _extract_node_mac(iface, iface_lookup)
