@@ -546,7 +546,7 @@ def update_device_via(
         for connection in connections:
             existing = dev_reg.async_get_device(connections={connection})
             if existing and (device is None or existing.id != device.id):
-                if not existing.identifiers:
+                if not existing.identifiers and not existing.config_entries:
                     LOGGER.debug(
                         "Skipping connection %s for %s due to existing device %s without identifiers",
                         connection,
