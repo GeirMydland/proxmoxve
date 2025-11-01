@@ -71,6 +71,7 @@ from .coordinator import (
     ProxmoxUpdateCoordinator,
     ProxmoxZFSCoordinator,
 )
+from .device_connections import connections_from_mac_data
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -802,11 +803,16 @@ def device_info(
     proxmox_version = None
     manufacturer = None
     serial_number = None
+    connections: set[tuple[str, str]] | None = None
     if api_category in (ProxmoxType.QEMU, ProxmoxType.LXC):
         coordinator = coordinators[f"{api_category}_{resource_id}"]
         if (coordinator_data := coordinator.data) is not None:
             vm_name = coordinator_data.name
             node = coordinator_data.node
+            connections = connections_from_mac_data(
+                getattr(coordinator_data, "mac_addresses", None),
+                getattr(coordinator_data, "primary_mac", None),
+            )
 
         name = f"{api_category.upper()} {vm_name} ({resource_id})"
         identifier = f"{config_entry.entry_id}_{api_category.upper()}_{resource_id}"
@@ -836,6 +842,10 @@ def device_info(
         if (coordinator_data := coordinator.data) is not None:
             model_processor = coordinator_data.model
             proxmox_version = f"Proxmox {coordinator_data.version}"
+            connections = connections_from_mac_data(
+                getattr(coordinator_data, "mac_addresses", None),
+                getattr(coordinator_data, "primary_mac", None),
+            )
 
         name = f"{ProxmoxType.Node.capitalize()} {node}"
         identifier = f"{config_entry.entry_id}_{ProxmoxType.Node.upper()}_{node}"
@@ -894,6 +904,7 @@ def device_info(
             hw_version=None,
             via_device=via_device,
             serial_number=serial_number or None,
+            connections=connections,
         )
     return DeviceInfo(
         entry_type=dr.DeviceEntryType.SERVICE,
@@ -906,6 +917,7 @@ def device_info(
         hw_version=None,
         via_device=via_device,
         serial_number=serial_number or None,
+        connections=connections,
     )
 
 

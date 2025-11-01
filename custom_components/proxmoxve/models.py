@@ -31,6 +31,8 @@ class ProxmoxNodeData:
     qemu_on_list: list
     lxc_on: int
     lxc_on_list: list
+    mac_addresses: dict[str, str] = dataclasses.field(default_factory=dict)
+    primary_mac: str | None = None
 
 
 @dataclasses.dataclass
@@ -51,6 +53,8 @@ class ProxmoxVMData:
     network_out: float | UndefinedType
     status: str | UndefinedType
     uptime: int | UndefinedType
+    mac_addresses: dict[str, str] = dataclasses.field(default_factory=dict)
+    primary_mac: str | None = None
 
 
 @dataclasses.dataclass
@@ -73,6 +77,8 @@ class ProxmoxLXCData:
     swap_free: float | UndefinedType
     swap_used: float | UndefinedType
     uptime: int | UndefinedType
+    mac_addresses: dict[str, str] = dataclasses.field(default_factory=dict)
+    primary_mac: str | None = None
 
 
 @dataclasses.dataclass
