@@ -111,6 +111,17 @@ def _extract_node_mac(
         iface.get("hwaddr"),
         iface.get("address"),
     ]
+
+    options = iface.get("options")
+    if isinstance(options, (list, tuple)):
+        for option in options:
+            if not isinstance(option, str):
+                continue
+            lower_option = option.lower()
+            if lower_option.startswith("hwaddress"):
+                parts = option.split()
+                if parts:
+                    candidates.append(parts[-1])
     for alt in iface.get("altnames", []) or []:
         if isinstance(alt, str):
             normalized = _normalize_mac(alt)
