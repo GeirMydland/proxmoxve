@@ -31,6 +31,7 @@ from .device_connections import (
     extract_node_mac_data,
     extract_qemu_mac_data,
     update_device_connections,
+    _resolve_host_addresses,
 )
 from .models import (
     ProxmoxDiskData,
@@ -139,7 +140,14 @@ class ProxmoxNodeCoordinator(ProxmoxCoordinator):
                 ProxmoxType.Node,
                 self.resource_id,
             )
-            mac_addresses, primary_mac = extract_node_mac_data(network_status)
+            host_addresses = await self.hass.async_add_executor_job(
+                _resolve_host_addresses,
+                str(self.config_entry.data.get(CONF_HOST, "")),
+            )
+            mac_addresses, primary_mac = extract_node_mac_data(
+                network_status,
+                host_addresses,
+            )
 
             api_path = f"nodes/{self.resource_id}/version"
             api_status["version"] = await self.hass.async_add_executor_job(

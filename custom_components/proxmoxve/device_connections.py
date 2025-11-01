@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any, Iterable
+import ipaddress
+import socket
+from typing import Any, Iterable, Set
 
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC
@@ -55,6 +57,89 @@ def _candidate_mac_values(iface: dict[str, Any]) -> Iterable[str | None]:
                         yield segments[-1]
 
 
+def _iface_addresses(iface: dict[str, Any]) -> Set[str]:
+    """Collect IP addresses associated with an interface entry."""
+    addresses: set[str] = set()
+    for key in ("address", "address6", "ip", "ip6"):
+        value = iface.get(key)
+        if isinstance(value, str) and value.strip():
+            addresses.add(value.strip().lower())
+    for key in ("cidr", "cidr6"):
+        value = iface.get(key)
+        if isinstance(value, str) and "/" in value:
+            addr = value.split("/", 1)[0].strip().lower()
+            if addr:
+                addresses.add(addr)
+    return addresses
+
+
+def _iface_is_active(iface: dict[str, Any]) -> bool:
+    """Determine whether an interface appears to be active."""
+    state = str(iface.get("state") or iface.get("status") or "").lower()
+    if state in {"up", "active", "connected", "running"}:
+        return True
+    active_flag = iface.get("active")
+    if isinstance(active_flag, bool):
+        return active_flag
+    if isinstance(active_flag, (int, float)):
+        return active_flag != 0
+    if isinstance(active_flag, str):
+        return active_flag.strip().lower() in {"1", "true", "yes", "on"}
+    return False
+
+
+def _host_matches_interface(host_addresses: Iterable[str], iface: dict[str, Any]) -> bool:
+    """Check whether any host address is present on the interface."""
+    host_set = {addr.lower() for addr in host_addresses if addr}
+    if not host_set:
+        return False
+    iface_addrs = _iface_addresses(iface)
+    return any(addr in iface_addrs for addr in host_set)
+
+
+def _interface_priority(iface: dict[str, Any]) -> int:
+    """Basic priority ranking between interfaces."""
+    iface_name = (iface.get("iface") or iface.get("name") or "").lower()
+    iface_type = (iface.get("type") or "").lower()
+    if iface_name.startswith("vmbr") or iface_type == "bridge":
+        return 0
+    if iface_name.startswith(("en", "eth")) or iface_type in {"eth", "bond"}:
+        return 1
+    if _is_wireless(iface):
+        return 3
+    return 2
+
+
+def _resolve_host_addresses(host: str) -> set[str]:
+    """Resolve host string into a set of IP addresses."""
+    if not host:
+        return set()
+    host = host.strip()
+    if not host:
+        return set()
+    try:
+        ip_obj = ipaddress.ip_address(host)
+        return {ip_obj.compressed.lower()}
+    except ValueError:
+        pass
+    try:
+        infos = socket.getaddrinfo(host, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+    except socket.gaierror:
+        return set()
+    addresses: set[str] = set()
+    for info in infos:
+        sockaddr = info[4]
+        if not sockaddr:
+            continue
+        addr = sockaddr[0]
+        try:
+            ip_obj = ipaddress.ip_address(addr)
+            addresses.add(ip_obj.compressed.lower())
+        except ValueError:
+            addresses.add(addr.lower())
+    return addresses
+
+
 def extract_qemu_mac_data(config: dict[str, Any]) -> tuple[dict[str, str], str | None]:
     """Extract interface->MAC mapping from a QEMU config payload."""
     macs: dict[str, str] = {}
@@ -103,13 +188,16 @@ def extract_lxc_mac_data(config: dict[str, Any]) -> tuple[dict[str, str], str | 
     return (macs, primary)
 
 
-def extract_node_mac_data(payload: Any) -> tuple[dict[str, str], str | None]:
+def extract_node_mac_data(
+    payload: Any,
+    host_addresses: set[str] | None = None,
+) -> tuple[dict[str, str], str | None]:
     """Extract MAC information from node network payload."""
     if not isinstance(payload, list):
         LOGGER.debug("Node network payload unexpected: %s", payload)
         return ({}, None)
 
-    candidates: list[tuple[int, str, str]] = []
+    candidates: list[tuple[tuple[int, int, int, str], str, str]] = []
     for iface in payload:
         if not isinstance(iface, dict):
             continue
@@ -124,13 +212,22 @@ def extract_node_mac_data(payload: Any) -> tuple[dict[str, str], str | None]:
         if not mac:
             continue
         is_bridge = iface_name.lower().startswith("vmbr") or str(iface.get("type") or "").lower() == "bridge"
-        score = 0 if is_bridge else (2 if _is_wireless(iface) else 1)
+        is_wireless = _is_wireless(iface)
+        has_host = _host_matches_interface(host_addresses or set(), iface)
+        priority = _interface_priority(iface)
+        score = (
+            0 if (has_host and not is_wireless) else 1,
+            priority,
+            0 if _iface_is_active(iface) else 1,
+            0 if not is_wireless else 1,
+            iface_name.lower(),
+        )
         candidates.append((score, iface_name, mac))
 
     if not candidates:
         return ({}, None)
 
-    candidates.sort(key=lambda item: (item[0], item[1].lower()))
+    candidates.sort(key=lambda item: item[0])
     macs = {name: mac for _, name, mac in candidates}
     primary = candidates[0][2]
     return (macs, primary)
