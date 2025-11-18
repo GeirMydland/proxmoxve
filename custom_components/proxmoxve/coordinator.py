@@ -7,9 +7,8 @@ from typing import TYPE_CHECKING, Any
 
 from homeassistant.const import CONF_HOST, CONF_USERNAME
 from homeassistant.exceptions import ConfigEntryAuthFailed
-from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import issue_registry as ir
-from homeassistant.helpers.typing import UNDEFINED, UndefinedType
+from homeassistant.helpers.typing import UNDEFINED
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from proxmoxer import AuthenticationError, ProxmoxAPI
 from proxmoxer.core import ResourceException
@@ -25,6 +24,13 @@ from requests.exceptions import (
 
 from .api import get_api
 from .const import CONF_NODE, DOMAIN, LOGGER, UPDATE_INTERVAL, ProxmoxType
+from .device_connections import (
+    async_get_node_mac_data,
+    connections_from_mac_data,
+    extract_lxc_mac_data,
+    extract_qemu_mac_data,
+    update_device_via,
+)
 from .models import (
     ProxmoxDiskData,
     ProxmoxLXCData,
@@ -83,6 +89,8 @@ class ProxmoxNodeCoordinator(ProxmoxCoordinator):
         node_status = ""
         node_api = {}
         api_status = {}
+        mac_addresses: dict[str, str] = {}
+        primary_mac: str | None = None
         if nodes_api := await self.hass.async_add_executor_job(
             poll_api,
             self.hass,
@@ -131,6 +139,14 @@ class ProxmoxNodeCoordinator(ProxmoxCoordinator):
                 self.resource_id,
             )
 
+            mac_addresses, primary_mac = await async_get_node_mac_data(
+                self.hass,
+                self.config_entry,
+                self.proxmox,
+                self.resource_id,
+                poll_api,
+            )
+
             api_path = f"nodes/{self.resource_id}/qemu"
             qemu_status = await self.hass.async_add_executor_job(
                 poll_api,
@@ -174,6 +190,14 @@ class ProxmoxNodeCoordinator(ProxmoxCoordinator):
             api_status["lxc"] = node_lxc
 
         if node_status != "":
+            connections = connections_from_mac_data(mac_addresses, primary_mac)
+            if connections is not None:
+                update_device_via(
+                    self,
+                    ProxmoxType.Node,
+                    self.resource_id,
+                    connections,
+                )
             return ProxmoxNodeData(
                 type=ProxmoxType.Node,
                 model=(
@@ -241,6 +265,8 @@ class ProxmoxNodeCoordinator(ProxmoxCoordinator):
                     if (("lxc" in api_status) and "list" in api_status["lxc"])
                     else UNDEFINED
                 ),
+                mac_addresses=mac_addresses,
+                primary_mac=primary_mac,
             )
         msg = f"Node {self.resource_id} unable to be found in host {self.config_entry.data[CONF_HOST]}"
         raise UpdateFailed(msg)
@@ -274,6 +300,8 @@ class ProxmoxQEMUCoordinator(ProxmoxCoordinator):
         """Update data  for Proxmox QEMU."""
         node_name = None
         api_status = None
+        mac_addresses: dict[str, str] = {}
+        primary_mac: str | None = None
 
         api_path = "cluster/resources"
         resources = await self.hass.async_add_executor_job(
@@ -302,6 +330,24 @@ class ProxmoxQEMUCoordinator(ProxmoxCoordinator):
                 ProxmoxType.QEMU,
                 self.resource_id,
             )
+            config_path = f"nodes/{node_name!s}/qemu/{self.resource_id}/config"
+            config_status = await self.hass.async_add_executor_job(
+                poll_api,
+                self.hass,
+                self.config_entry,
+                self.proxmox,
+                config_path,
+                ProxmoxType.QEMU,
+                self.resource_id,
+            )
+            if isinstance(config_status, dict):
+                mac_addresses, primary_mac = extract_qemu_mac_data(config_status)
+            else:
+                LOGGER.debug(
+                    "QEMU %s config missing or access denied: %s",
+                    self.resource_id,
+                    config_status,
+                )
         else:
             msg = f"{self.resource_id} QEMU node not found"
             raise UpdateFailed(msg)
@@ -310,7 +356,13 @@ class ProxmoxQEMUCoordinator(ProxmoxCoordinator):
             msg = f"QEMU {self.resource_id} unable to be found"
             raise UpdateFailed(msg)
 
-        update_device_via(self, ProxmoxType.QEMU, node_name)
+        connections = connections_from_mac_data(mac_addresses, primary_mac)
+        LOGGER.debug(
+            "QEMU %s detected connections: %s",
+            self.resource_id,
+            connections,
+        )
+        update_device_via(self, ProxmoxType.QEMU, node_name, connections)
         return ProxmoxVMData(
             type=ProxmoxType.QEMU,
             node=node_name,
@@ -334,6 +386,8 @@ class ProxmoxQEMUCoordinator(ProxmoxCoordinator):
             network_out=api_status.get("netout", UNDEFINED),
             disk_total=api_status.get("maxdisk", UNDEFINED),
             disk_used=api_status.get("disk", UNDEFINED),
+            mac_addresses=mac_addresses,
+            primary_mac=primary_mac,
         )
 
 
@@ -365,6 +419,8 @@ class ProxmoxLXCCoordinator(ProxmoxCoordinator):
         """Update data  for Proxmox LXC."""
         node_name = None
         api_status = None
+        mac_addresses: dict[str, str] = {}
+        primary_mac: str | None = None
 
         api_path = "cluster/resources"
         resources = await self.hass.async_add_executor_job(
@@ -393,6 +449,24 @@ class ProxmoxLXCCoordinator(ProxmoxCoordinator):
                 ProxmoxType.LXC,
                 self.resource_id,
             )
+            config_path = f"nodes/{node_name!s}/lxc/{self.resource_id}/config"
+            config_status = await self.hass.async_add_executor_job(
+                poll_api,
+                self.hass,
+                self.config_entry,
+                self.proxmox,
+                config_path,
+                ProxmoxType.LXC,
+                self.resource_id,
+            )
+            if isinstance(config_status, dict):
+                mac_addresses, primary_mac = extract_lxc_mac_data(config_status)
+            else:
+                LOGGER.debug(
+                    "LXC %s config missing or access denied: %s",
+                    self.resource_id,
+                    config_status,
+                )
         else:
             msg = f"{self.resource_id} LXC node not found"
             raise UpdateFailed(msg)
@@ -401,7 +475,13 @@ class ProxmoxLXCCoordinator(ProxmoxCoordinator):
             msg = f"LXC {self.resource_id} unable to be found"
             raise UpdateFailed(msg)
 
-        update_device_via(self, ProxmoxType.LXC, node_name)
+        connections = connections_from_mac_data(mac_addresses, primary_mac)
+        LOGGER.debug(
+            "LXC %s detected connections: %s",
+            self.resource_id,
+            connections,
+        )
+        update_device_via(self, ProxmoxType.LXC, node_name, connections)
 
         return ProxmoxLXCData(
             type=ProxmoxType.LXC,
@@ -428,6 +508,8 @@ class ProxmoxLXCCoordinator(ProxmoxCoordinator):
                 if ("maxswap" in api_status and "swap" in api_status)
                 else UNDEFINED
             ),
+            mac_addresses=mac_addresses,
+            primary_mac=primary_mac,
         )
 
 
@@ -849,45 +931,6 @@ class ProxmoxDiskCoordinator(ProxmoxCoordinator):
 
         msg = f"Disk {self.resource_id} not found on node {self.node_name}."
         raise UpdateFailed(msg)
-
-
-def update_device_via(
-    self,
-    api_category: ProxmoxType,
-    node_name: str,
-) -> None:
-    """Return the Device Info."""
-    dev_reg = dr.async_get(self.hass)
-    device = dev_reg.async_get_or_create(
-        config_entry_id=self.config_entry.entry_id,
-        identifiers={
-            (
-                DOMAIN,
-                f"{self.config_entry.entry_id}_{api_category.upper()}_{self.resource_id}",
-            )
-        },
-    )
-    via_device = dev_reg.async_get_device(
-        {
-            (
-                DOMAIN,
-                f"{self.config_entry.entry_id}_{ProxmoxType.Node.upper()}_{node_name}",
-            )
-        }
-    )
-    via_device_id: str | UndefinedType = via_device.id if via_device else UNDEFINED
-    if device.via_device_id != via_device_id:
-        LOGGER.debug(
-            "Update device %s - connected via device: old=%s, new=%s",
-            self.resource_id,
-            device.via_device_id,
-            via_device_id,
-        )
-        dev_reg.async_update_device(
-            device.id,
-            via_device_id=via_device_id,
-            entry_type=dr.DeviceEntryType.SERVICE,
-        )
 
 
 def poll_api(

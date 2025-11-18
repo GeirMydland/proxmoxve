@@ -20,10 +20,12 @@
             "qemu": "Virtual Machines (QEMU)",
             "lxc": "Linux Containers (LXC)",
             "storage": "Storages",
-            "disks_enable": "Enable physical disk information"
+            "disks_enable": "Enable physical disk information",
+            "ignore_wifi_interfaces": "Ignore Wi-Fi interfaces"
           },
           "data_description": {
-            "disks_enable": "If you work with disk hibernation, you must disable this integration option so that it does not cause the disks to be reactivated unduly."
+            "disks_enable": "If you work with disk hibernation, you must disable this integration option so that it does not cause the disks to be reactivated unduly.",
+            "ignore_wifi_interfaces": "Skip wireless interfaces when selecting MAC addresses for device linking."
           }
         },
         "reauth_confirm": {
@@ -142,10 +144,12 @@
             "nodes": "Nodes",
             "qemu": "Virtual Machines (QEMU)",
             "storage": "Storages",
-            "disks_enable": "Enable physical disk information"
+            "disks_enable": "Enable physical disk information",
+            "ignore_wifi_interfaces": "Ignore Wi-Fi interfaces"
           },
           "data_description": {
-            "disks_enable": "If you work with disk hibernation, you must disable this integration option so that it does not cause the disks to be reactivated unduly."
+            "disks_enable": "If you work with disk hibernation, you must disable this integration option so that it does not cause the disks to be reactivated unduly.",
+            "ignore_wifi_interfaces": "Skip wireless interfaces when selecting MAC addresses for device linking."
           }
         }
       },
