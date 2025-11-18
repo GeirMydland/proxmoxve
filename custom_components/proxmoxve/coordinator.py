@@ -820,7 +820,7 @@ class ProxmoxDiskCoordinator(ProxmoxCoordinator):
                 or ("serial" in disk and disk["serial"] == self.resource_id)
             ):
                 disk_attributes = {}
-                api_path = f"nodes/{self.node_name}/disks/smart?disk={disk["devpath"]}"
+                api_path = f"nodes/{self.node_name}/disks/smart?disk={disk['devpath']}"
                 try:
                     disk_attributes_api = await self.hass.async_add_executor_job(
                         poll_api,
@@ -940,6 +940,7 @@ def poll_api(
     api_path: str,
     api_category: ProxmoxType,
     resource_id: str | int | None = None,
+    *,
     issue_crete_permissions: bool | None = True,
 ) -> dict[str, Any] | None:
     """Return data from the Proxmox Node API."""

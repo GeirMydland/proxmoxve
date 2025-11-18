@@ -39,7 +39,7 @@ TO_REDACT_API = [""]
 TO_REDACT_DATA = ["configuration_url"]
 
 
-async def async_get_api_data_diagnostics(
+async def async_get_api_data_diagnostics(  # noqa: C901
     hass: HomeAssistant, config_entry: ConfigEntry
 ) -> dict[str, Any]:
     """Get API info for diagnostics."""

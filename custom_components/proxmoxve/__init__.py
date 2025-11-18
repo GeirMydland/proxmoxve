@@ -375,7 +375,7 @@ async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) ->
                         (
                             DOMAIN,
                             (
-                                f"{config_entry.entry_id}_{ProxmoxType.Disk.upper()}_{node}_{disk["wwn"] if "wwn" in disk else disk["by_id_link"] if "by_id_link" in disk else disk["serial"]}"
+                                f"{config_entry.entry_id}_{ProxmoxType.Disk.upper()}_{node}_{disk['wwn'] if 'wwn' in disk else disk['by_id_link'] if 'by_id_link' in disk else disk['serial']}"
                             ),
                         )
                     },
@@ -426,7 +426,7 @@ async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) ->
                         (
                             DOMAIN,
                             (
-                                f"{config_entry.entry_id}_{ProxmoxType.Disk.upper()}_{node}_{disk["by_id_link"] if "by_id_link" in disk else disk["serial"]}"
+                                f"{config_entry.entry_id}_{ProxmoxType.Disk.upper()}_{node}_{disk['by_id_link'] if 'by_id_link' in disk else disk['serial']}"
                             ),
                         )
                     },
@@ -437,7 +437,7 @@ async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) ->
                         (
                             DOMAIN,
                             (
-                                f"{config_entry.entry_id}_{ProxmoxType.Disk.upper()}_{node}_{disk["wwn"] if "wwn" in disk else disk["by_id_link"] if "by_id_link" in disk else disk["serial"]}"
+                                f"{config_entry.entry_id}_{ProxmoxType.Disk.upper()}_{node}_{disk['wwn'] if 'wwn' in disk else disk['by_id_link'] if 'by_id_link' in disk else disk['serial']}"
                             ),
                         )
                     },
@@ -790,6 +790,7 @@ def device_info(
     api_category: ProxmoxType,
     node: str | None = None,
     resource_id: int | None = None,
+    *,
     create: bool | None = False,
     cordinator_resource: ProxmoxDiskData | ProxmoxStorageData | None = None,
 ):

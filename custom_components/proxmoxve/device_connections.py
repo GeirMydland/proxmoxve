@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import ipaddress
 import socket
-from typing import Any, Callable, Iterable, Set
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterable
 
 from homeassistant.const import CONF_HOST
 from homeassistant.helpers import device_registry as dr
@@ -52,7 +55,9 @@ def _extract_lxc_mac(net_value: Any) -> tuple[str | None, str | None]:
         return (None, None)
     mac = None
     iface_name = None
-    for part in (segment.strip() for segment in net_value.split(",") if segment.strip()):
+    for part in (
+        segment.strip() for segment in net_value.split(",") if segment.strip()
+    ):
         if part.startswith("hwaddr="):
             mac = part.split("=", 1)[1].strip()
         elif part.startswith("name="):
@@ -178,9 +183,7 @@ def _iface_is_wireless(iface: dict[str, Any]) -> bool:
     iface_type = (iface.get("type") or "").lower()
     if iface_name.startswith(("wl", "wi", "ath", "air", "wlan")):
         return True
-    if iface_type in {"wireless", "wifi", "wlan"}:
-        return True
-    return False
+    return iface_type in {"wireless", "wifi", "wlan"}
 
 
 def _iface_addresses(iface: dict[str, Any]) -> set[str]:
@@ -216,7 +219,7 @@ def _iface_is_active(iface: dict[str, Any]) -> bool:
     return False
 
 
-async def _async_host_addresses(hass, host: str) -> Set[str]:
+async def _async_host_addresses(hass, host: str) -> set[str]:
     """Resolve host string into a set of lowercase addresses."""
     if not host:
         return set()
@@ -226,10 +229,7 @@ async def _async_host_addresses(hass, host: str) -> Set[str]:
         return set()
 
     parsed = urlparse(host)
-    if parsed.scheme:
-        hostname = parsed.hostname or host
-    else:
-        hostname = host
+    hostname = parsed.hostname or host if parsed.scheme else host
 
     hostname = hostname.strip("[]").strip()
     addresses: set[str] = set()
@@ -237,9 +237,10 @@ async def _async_host_addresses(hass, host: str) -> Set[str]:
     try:
         ip_obj = ipaddress.ip_address(hostname)
         addresses.add(ip_obj.compressed.lower())
-        return addresses
     except ValueError:
         pass
+    else:
+        return addresses
 
     # Host might be IPv6 with zone id (e.g. fe80::1%eth0)
     if "%" in hostname:
@@ -247,9 +248,10 @@ async def _async_host_addresses(hass, host: str) -> Set[str]:
         try:
             ip_obj = ipaddress.ip_address(without_zone)
             addresses.add(ip_obj.compressed.lower())
-            return addresses
         except ValueError:
             hostname = without_zone
+        else:
+            return addresses
 
     try:
         infos = await hass.async_add_executor_job(
@@ -276,7 +278,9 @@ async def _async_host_addresses(hass, host: str) -> Set[str]:
     return addresses
 
 
-def _host_matches_interface(host_addresses: Iterable[str], iface: dict[str, Any]) -> bool:
+def _host_matches_interface(
+    host_addresses: Iterable[str], iface: dict[str, Any]
+) -> bool:
     """Return True if interface carries any of the configured host addresses."""
     normalized_host_addresses = {addr.lower() for addr in host_addresses if addr}
     if not normalized_host_addresses:
@@ -377,7 +381,7 @@ async def async_get_node_mac_data(
                             detail_path,
                             ProxmoxType.Node,
                             f"{node_name}_{iface_id}",
-                            False,
+                            issue_crete_permissions=False,
                         )
                     except UpdateFailed:
                         detail = None
@@ -394,9 +398,7 @@ async def async_get_node_mac_data(
                         iface_id,
                         detail,
                     )
-                    if not any(
-                        key in detail for key in ("mac", "hwaddr", "address")
-                    ):
+                    if not any(key in detail for key in ("mac", "hwaddr", "address")):
                         status_path = f"nodes/{node_name}/network/{iface_id}/status"
                         try:
                             status_detail = await hass.async_add_executor_job(
@@ -407,7 +409,7 @@ async def async_get_node_mac_data(
                                 status_path,
                                 ProxmoxType.Node,
                                 f"{node_name}_{iface_id}_status",
-                                False,
+                                issue_crete_permissions=False,
                             )
                         except UpdateFailed as err:
                             LOGGER.debug(
@@ -450,7 +452,8 @@ async def async_get_node_mac_data(
                     "is_wireless": _iface_is_wireless(iface),
                     "has_host": _host_matches_interface(host_addresses, iface),
                     "is_active": _iface_is_active(iface),
-                    "is_bridge": iface_type == "bridge" or iface_name_lower.startswith("vmbr"),
+                    "is_bridge": iface_type == "bridge"
+                    or iface_name_lower.startswith("vmbr"),
                     "is_physical": iface_name_lower.startswith(("en", "eth"))
                     or iface_type in {"eth", "bond"},
                     "priority": _interface_priority(iface),
@@ -460,7 +463,9 @@ async def async_get_node_mac_data(
         if candidate_entries:
             prioritized_set = candidate_entries
             if ignore_wifi:
-                non_wifi = [entry for entry in candidate_entries if not entry["is_wireless"]]
+                non_wifi = [
+                    entry for entry in candidate_entries if not entry["is_wireless"]
+                ]
                 if non_wifi:
                     prioritized_set = non_wifi
 
@@ -620,7 +625,10 @@ def update_device_via(
 
     if (
         device.via_device_id != via_device_id
-        or (new_connections_set is not None and current_connections != new_connections_set)
+        or (
+            new_connections_set is not None
+            and current_connections != new_connections_set
+        )
         or adopted_existing
     ):
         LOGGER.debug(
